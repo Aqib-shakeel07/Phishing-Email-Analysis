@@ -12,8 +12,10 @@ PORT = int(os.getenv("PORT", 5000))
 
 # ---------- Paths ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-MODEL_DIR = os.path.join(BASE_DIR, "models")
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 REPORT_DIR = os.path.join(BASE_DIR, "reports")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -33,9 +35,12 @@ DATASET_PATH = os.path.join(DATA_DIR, "phishing_dataset.csv")
 # ---------- Database ----------
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'phishing.db')}")
 
-# ---------- APIs ----------
+# ---------- External APIs ----------
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
 VIRUSTOTAL_URL = "https://www.virustotal.com/api/v3"
+
+ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY", "")
+ABUSEIPDB_URL = "https://api.abuseipdb.com/api/v2"
 
 # ---------- Scoring weights ----------
 WEIGHTS = {
@@ -49,12 +54,15 @@ WEIGHTS = {
 # ---------- Verdict thresholds ----------
 THRESHOLD_SAFE = 30
 THRESHOLD_SUSPICIOUS = 60
-# >60 = Phishing
 
 # ---------- Limits ----------
 MAX_UPLOAD_SIZE = 25 * 1024 * 1024  # 25 MB
 ALLOWED_EXTENSIONS = {"eml", "msg", "txt"}
-REQUEST_TIMEOUT = 10
+REQUEST_TIMEOUT = 15
+
+# ---------- API cache TTL (seconds) ----------
+CACHE_TTL_VT = 60 * 60 * 24         # 24h
+CACHE_TTL_ABUSE = 60 * 60 * 24      # 24h
 
 # ---------- Logging ----------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

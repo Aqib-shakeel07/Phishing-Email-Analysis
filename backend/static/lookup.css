@@ -1,0 +1,191 @@
+/* ========== Lookup Pages ========== */
+
+.status-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+.status-chip.ok {
+  color: var(--safe);
+  border-color: rgba(34,197,94,0.35);
+  background: rgba(34,197,94,0.10);
+}
+.status-chip.bad {
+  color: var(--phishing);
+  border-color: rgba(239,68,68,0.35);
+  background: rgba(239,68,68,0.10);
+}
+
+.lookup-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.lookup-bar input {
+  flex: 1;
+  min-width: 240px;
+  padding: 10px 14px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-family: "Consolas", "Courier New", monospace;
+  outline: none;
+}
+.lookup-bar input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79,139,255,0.15);
+}
+
+/* Key-value grid for results */
+.kv-grid {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 6px 14px;
+  font-size: 0.85rem;
+}
+.kv-grid .k {
+  color: var(--muted);
+  font-weight: 500;
+  padding: 4px 0;
+  word-break: break-word;
+}
+.kv-grid .v {
+  padding: 4px 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 0.82rem;
+}
+.kv-grid .v.big {
+  font-size: 1rem;
+  font-family: inherit;
+}
+.kv-grid .v a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Engine detection badges */
+.stat-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.stat-chip {
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 130px;
+}
+.stat-chip .label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.stat-chip .count {
+  font-weight: 700;
+  font-size: 1rem;
+  margin-left: auto;
+}
+.stat-chip.malicious { border-left: 4px solid var(--phishing); }
+.stat-chip.malicious .count { color: var(--phishing); }
+.stat-chip.suspicious { border-left: 4px solid var(--suspicious); }
+.stat-chip.suspicious .count { color: var(--suspicious); }
+.stat-chip.harmless { border-left: 4px solid var(--safe); }
+.stat-chip.harmless .count { color: var(--safe); }
+.stat-chip.undetected { border-left: 4px solid var(--muted); }
+.stat-chip.undetected .count { color: var(--muted); }
+
+/* Confidence bar (AbuseIPDB) */
+.confidence-wrap {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.confidence-track {
+  flex: 1;
+  height: 14px;
+  background: var(--panel-2);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.confidence-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+  border-radius: 999px;
+  transition: width 0.9s ease, background 0.4s;
+}
+.confidence-fill.mid { background: linear-gradient(90deg, #d97706, #f59e0b); }
+.confidence-fill.high { background: linear-gradient(90deg, #dc2626, #ef4444); }
+.confidence-value {
+  font-weight: 700;
+  font-size: 1.1rem;
+  min-width: 60px;
+  text-align: right;
+}
+
+/* Report cards */
+.report-card {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+}
+.report-card .rc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.report-card .rc-date {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.report-card .rc-comment {
+  color: var(--text);
+  word-break: break-word;
+}
+.report-card .rc-cats {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.report-card .rc-cats span {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-right: 6px;
+  background: rgba(79,139,255,0.12);
+  color: var(--accent);
+  border-radius: 4px;
+}
+
+/* Big result verdict badges */
+.badge.safe, .badge.harmless { background: rgba(34,197,94,0.15); color: var(--safe); }
+.badge.suspicious, .badge.mid { background: rgba(245,158,11,0.15); color: var(--suspicious); }
+.badge.phishing, .badge.malicious, .badge.high { background: rgba(239,68,68,0.15); color: var(--phishing); }
+.badge.undetected { background: rgba(148,163,184,0.15); color: var(--muted); }
+
+/* Responsive */
+@media (max-width: 640px) {
+  .kv-grid { grid-template-columns: 130px 1fr; font-size: 0.8rem; }
+  .lookup-bar input { min-width: 0; }
+}

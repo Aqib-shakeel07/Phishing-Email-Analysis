@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VirusTotal · Phishing Email Analyzer</title>
+  <link rel="stylesheet" href="/static/dashboard.css" />
+  <link rel="stylesheet" href="/static/lookup.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">🛡️</div>
+        <div class="brand-name">PhishGuard</div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-section">MAIN</div>
+        <a href="/dashboard" class="nav-item">
+          <span class="nav-icon">◆</span> Dashboard
+        </a>
+        <a href="#" class="nav-item" id="openScanModalNav">
+          <span class="nav-icon">⬆</span> Analyze
+        </a>
+
+        <div class="nav-section">INTEL</div>
+        <a href="/virustotal" class="nav-item active">
+          <span class="nav-icon">🦠</span> VirusTotal
+        </a>
+        <a href="/abuseipdb" class="nav-item">
+          <span class="nav-icon">🚨</span> AbuseIPDB
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="promo-card">
+          <div class="promo-title">Threat Intel</div>
+          <div class="promo-text">Cross-check URLs, IPs, domains and hashes.</div>
+          <a href="/dashboard" class="promo-btn">← Back to Dashboard</a>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="page-title">VirusTotal Lookup</h1>
+        </div>
+        <div class="topbar-right">
+          <span id="vtStatus" class="status-chip">checking…</span>
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Query</h3>
+          <div class="filters">
+            <select id="vtType">
+              <option value="ip">IP Address</option>
+              <option value="url">URL</option>
+              <option value="domain">Domain</option>
+              <option value="hash">File Hash (SHA-256)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="lookup-bar">
+          <input type="text" id="vtQuery" placeholder="Enter IP, URL, domain or hash…" />
+          <button class="btn primary" id="vtLookupBtn">Look up</button>
+          <button class="btn ghost" id="vtClearBtn">Clear</button>
+        </div>
+
+        <div class="muted" style="margin-top:8px">
+          Press <strong>Enter</strong> to search. Results cached for 24 h.
+        </div>
+      </section>
+
+      <section id="vtLoading" class="panel hidden">
+        <p>⏳ Querying VirusTotal…</p>
+      </section>
+
+      <section id="vtError" class="panel hidden">
+        <p id="vtErrorText"></p>
+      </section>
+
+      <section id="vtResult" class="hidden">
+        <div class="panel">
+          <div class="panel-head">
+            <h3 id="vtResultTitle">Result</h3>
+            <span id="vtVerdict" class="badge">—</span>
+          </div>
+          <div id="vtSummary" class="kv-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Engine Detections</h3></div>
+          <div id="vtStats" class="stat-badges"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Details</h3></div>
+          <div id="vtDetails" class="kv-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Raw JSON</h3></div>
+          <details>
+            <summary style="cursor:pointer;color:var(--accent)">Show / hide raw response</summary>
+            <pre id="vtRaw" class="raw-pre"></pre>
+          </details>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/virustotal.js"></script>
+</body>
+</html>

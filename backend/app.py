@@ -22,6 +22,7 @@ from content_analyzer import ContentAnalyzer
 from attachment_analyzer import AttachmentAnalyzer
 from scoring_engine import ScoringEngine
 from virustotal_api import VirusTotalClient
+from abuseipdb_api import AbuseIPDBClient
 from ml_classifier import MLClassifier, generate_synthetic_dataset
 from report_generator import ReportGenerator, build_full_report
 
@@ -32,6 +33,7 @@ CORS(app)
 
 
 vt_client = VirusTotalClient()
+abuse_client = AbuseIPDBClient()
 header_analyzer = HeaderAnalyzer()
 url_analyzer = URLAnalyzer()
 content_analyzer = ContentAnalyzer()
@@ -48,6 +50,8 @@ def bootstrap():
     except Exception as e:
         logger.warning(f"Brand seed skipped: {e}")
 
+
+# ---------------- Core pipeline ----------------
 
 def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
     msg = parse_email_bytes(raw_bytes)
@@ -70,8 +74,6 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
 
     analysis = {
         "filename": filename,
-
-        # From / To
         "sender": header_res.get("sender"),
         "sender_name": header_res.get("sender_name"),
         "sender_domain": header_res.get("sender_domain"),
@@ -86,12 +88,10 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "message_id": header_res.get("message_id"),
         "received_chain": header_res.get("received_chain"),
 
-        # NEW: MXToolbox-style data
         "hops": header_res.get("hops", []),
         "full_headers": header_res.get("full_headers", []),
         "auth_summary": header_res.get("auth_summary", {}),
 
-        # Auth
         "spf_present": header_res.get("spf_present"),
         "spf_pass": header_res.get("spf_pass"),
         "dkim_present": header_res.get("dkim_present"),
@@ -100,7 +100,6 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "dmarc_pass": header_res.get("dmarc_pass"),
         "auth_headers_raw": header_res.get("auth_headers_raw"),
 
-        # Scores
         "header_score": header_res.get("score", 0),
         "url_score": url_res.get("score", 0),
         "content_score": content_res.get("score", 0),
@@ -113,7 +112,6 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "triggered_features": final.get("triggered_features", []),
         "explanation": final.get("explanation", ""),
 
-        # Contents
         "urls_found": url_res.get("urls", []),
         "ips_found": url_res.get("ips", []),
         "attachments": attachment_res.get("attachments", []),
@@ -201,7 +199,7 @@ def _stringify_headers(msg) -> str:
         return ""
 
 
-# ---------------- Routes ----------------
+# ---------------- Page routes ----------------
 
 @app.route("/", methods=["GET"])
 def index():
@@ -220,6 +218,18 @@ def dashboard():
     return render_template("dashboard.html")
 
 
+@app.route("/virustotal", methods=["GET"])
+def virustotal_page():
+    return render_template("virustotal.html")
+
+
+@app.route("/abuseipdb", methods=["GET"])
+def abuseipdb_page():
+    return render_template("abuseipdb.html")
+
+
+# ---------------- Analysis API ----------------
+
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({
@@ -227,6 +237,8 @@ def health():
         "app": APP_NAME,
         "version": APP_VERSION,
         "ml_ready": ml_classifier.is_ready(),
+        "virustotal_ready": vt_client.is_ready(),
+        "abuseipdb_ready": abuse_client.is_ready(),
     })
 
 
@@ -317,6 +329,124 @@ def api_train():
         return jsonify({"error": str(e)}), 500
 
 
+# ---------------- VirusTotal API ----------------
+
+@app.route("/api/vt/ip", methods=["GET"])
+def api_vt_ip():
+    ip = request.args.get("ip", "").strip()
+    if not ip:
+        return jsonify({"error": "missing ?ip="}), 400
+    if not vt_client.is_ready():
+        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
+    return jsonify(vt_client.lookup_ip(ip))
+
+
+@app.route("/api/vt/url", methods=["GET"])
+def api_vt_url():
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "missing ?url="}), 400
+    if not vt_client.is_ready():
+        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
+    return jsonify(vt_client.lookup_url_full(url))
+
+
+@app.route("/api/vt/domain", methods=["GET"])
+def api_vt_domain():
+    domain = request.args.get("domain", "").strip()
+    if not domain:
+        return jsonify({"error": "missing ?domain="}), 400
+    if not vt_client.is_ready():
+        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
+    return jsonify(vt_client.lookup_domain_full(domain))
+
+
+@app.route("/api/vt/hash", methods=["GET"])
+def api_vt_hash():
+    h = request.args.get("hash", "").strip()
+    if not h:
+        return jsonify({"error": "missing ?hash="}), 400
+    if not vt_client.is_ready():
+        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
+    return jsonify(vt_client.lookup_hash(h))
+
+
+# ---------------- AbuseIPDB API ----------------
+
+@app.route("/api/abuse/ip", methods=["GET"])
+def api_abuse_ip():
+    ip = request.args.get("ip", "").strip()
+    if not ip:
+        return jsonify({"error": "missing ?ip="}), 400
+    if not abuse_client.is_ready():
+        return jsonify({"error": "ABUSEIPDB_API_KEY not configured"}), 503
+    days = int(request.args.get("days", 90))
+    return jsonify(abuse_client.check_ip(ip, max_age_days=days))
+
+
+# ---------------- Enrichment (auto VT + Abuse for a saved analysis) ----------------
+
+@app.route("/api/enrich/<int:analysis_id>", methods=["GET"])
+def api_enrich(analysis_id):
+    """
+    For a saved analysis, run VT + AbuseIPDB on all its URLs and IPs.
+    Returns a combined report. Cached server-side.
+    """
+    row = get_analysis(analysis_id)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+
+    a = _row_to_dict(row)
+    urls = a.get("urls_found", []) or []
+    ips = a.get("ips_found", []) or []
+
+    # URL lookups (VirusTotal)
+    vt_urls = []
+    if vt_client.is_ready():
+        seen = set()
+        for u in urls[:10]:  # cap to avoid rate limits
+            link = u.get("url")
+            if not link or link in seen:
+                continue
+            seen.add(link)
+            try:
+                vt_urls.append(vt_client.lookup_url_full(link))
+            except Exception as e:
+                vt_urls.append({"url": link, "error": str(e)})
+
+    # IP lookups (VirusTotal + AbuseIPDB)
+    vt_ips = []
+    abuse_ips = []
+    seen_ips = set()
+    for entry in ips[:10]:
+        ip = entry.get("ip")
+        if not ip or ip in seen_ips:
+            continue
+        seen_ips.add(ip)
+        if vt_client.is_ready():
+            try:
+                vt_ips.append(vt_client.lookup_ip(ip))
+            except Exception as e:
+                vt_ips.append({"ip": ip, "error": str(e)})
+        if abuse_client.is_ready():
+            try:
+                abuse_ips.append(abuse_client.check_ip(ip))
+            except Exception as e:
+                abuse_ips.append({"ip": ip, "error": str(e)})
+
+    return jsonify({
+        "analysis_id": analysis_id,
+        "virustotal": {"urls": vt_urls, "ips": vt_ips},
+        "abuseipdb": {"ips": abuse_ips},
+        "keys": {
+            "virustotal": vt_client.is_ready(),
+            "abuseipdb": abuse_client.is_ready(),
+        },
+    })
+
+
+# ---------------- Helpers ----------------
+
 def _row_to_dict(row) -> dict:
     return {
         "id": row.id,
@@ -336,7 +466,6 @@ def _row_to_dict(row) -> dict:
         "message_id": getattr(row, "message_id", None),
         "received_chain": row.received_chain or [],
 
-        # NEW
         "hops": getattr(row, "hops", None) or [],
         "full_headers": getattr(row, "full_headers", None) or [],
         "auth_summary": getattr(row, "auth_summary", None) or {},

@@ -80,6 +80,7 @@ function bindEvents() {
   const resultCloseBtn = $("resultCloseBtn");
   const resultJsonBtn = $("resultJsonBtn");
   const resultPdfBtn = $("resultPdfBtn");
+  const resultEnrichBtn = $("resultEnrichBtn");
   const resultModal = $("resultModal");
   const scanModal = $("scanModal");
 
@@ -87,6 +88,7 @@ function bindEvents() {
   if (resultCloseBtn) resultCloseBtn.onclick = closeResult;
   if (resultJsonBtn) resultJsonBtn.onclick = () => currentResultId && window.open(`/api/analyses/${currentResultId}/report?format=json`, "_blank");
   if (resultPdfBtn) resultPdfBtn.onclick = () => currentResultId && window.open(`/api/analyses/${currentResultId}/report?format=pdf`, "_blank");
+  if (resultEnrichBtn) resultEnrichBtn.onclick = runEnrichment;
 
   if (resultModal) resultModal.addEventListener("click", (e) => { if (e.target === resultModal) closeResult(); });
   if (scanModal) scanModal.addEventListener("click", (e) => { if (e.target === scanModal) closeModal(); });
@@ -206,10 +208,116 @@ function showResult(a) {
     ${renderIpsCard(a)}
     ${renderAttachmentsCard(a)}
     ${renderRawHeaders(a)}
+    <div id="enrichmentZone"></div>
   `;
 
   const overlay = $("resultModal");
   if (overlay) overlay.classList.remove("hidden");
+}
+
+/* ---- Enrich with VT + AbuseIPDB ---- */
+async function runEnrichment() {
+  if (!currentResultId) return;
+  const zone = $("enrichmentZone");
+  if (!zone) return;
+
+  zone.innerHTML = `<div class="result-card"><h4>🌐 Enrichment</h4><p class="muted">Querying VirusTotal & AbuseIPDB…</p></div>`;
+
+  try {
+    const res = await fetch(`${API}/api/enrich/${currentResultId}`);
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      zone.innerHTML = `<div class="result-card"><h4>Enrichment</h4><p class="muted">❌ ${escapeHtml(data.error || "failed")}</p></div>`;
+      return;
+    }
+    renderEnrichment(zone, data);
+  } catch (err) {
+    zone.innerHTML = `<div class="result-card"><h4>Enrichment</h4><p class="muted">❌ ${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function renderEnrichment(zone, data) {
+  const vt = data.virustotal || {};
+  const abuse = data.abuseipdb || {};
+  const keys = data.keys || {};
+
+  let html = `<div class="result-card"><h4>🌐 Threat Intelligence Enrichment</h4>`;
+
+  if (!keys.virustotal && !keys.abuseipdb) {
+    html += `<p class="muted">⚠ No API keys configured. Add <code>VIRUSTOTAL_API_KEY</code> and <code>ABUSEIPDB_API_KEY</code> to <code>.env</code>, then restart.</p></div>`;
+    zone.innerHTML = html;
+    return;
+  }
+
+  // VT URLs
+  if (vt.urls && vt.urls.length) {
+    html += `<h4 style="margin-top:12px">🦠 VirusTotal · URLs</h4>`;
+    html += vt.urls.map((u) => {
+      const pos = u.positives ?? 0;
+      const tot = u.total_engines ?? 0;
+      const cls = pos === 0 ? "safe" : pos / Math.max(tot, 1) < 0.05 ? "suspicious" : "malicious";
+      const label = u.error ? escapeHtml(u.error) : `${pos}/${tot} flags`;
+      return `<div class="url-item">
+        <div class="url">${escapeHtml(shortenUrl(u.url || ""))}</div>
+        <div class="meta">
+          <span class="badge ${cls}">${label}</span>
+          <a class="ti-link" target="_blank"
+             href="https://www.virustotal.com/gui/url/${encodeURIComponent(btoa(u.url || "").replace(/=+$/, ""))}">Open in VirusTotal ↗</a>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  // VT IPs
+  if (vt.ips && vt.ips.length) {
+    html += `<h4 style="margin-top:12px">🦠 VirusTotal · IPs</h4>`;
+    html += vt.ips.map((r) => {
+      const pos = r.positives ?? 0;
+      const tot = r.total_engines ?? 0;
+      const cls = pos === 0 ? "safe" : pos / Math.max(tot, 1) < 0.05 ? "suspicious" : "malicious";
+      const label = r.error ? escapeHtml(r.error) : `${pos}/${tot} flags`;
+      return `<div class="url-item">
+        <div class="url">${escapeHtml(r.ip || "")}</div>
+        <div class="meta">
+          <span class="badge ${cls}">${label}</span>
+          ${r.country ? `<span class="module-tag">${escapeHtml(r.country)}</span>` : ""}
+          ${r.as_owner ? `<span class="module-tag">${escapeHtml(r.as_owner)}</span>` : ""}
+          <a class="ti-link" target="_blank"
+             href="https://www.virustotal.com/gui/ip-address/${encodeURIComponent(r.ip || "")}">Open in VirusTotal ↗</a>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  // AbuseIPDB IPs
+  if (abuse.ips && abuse.ips.length) {
+    html += `<h4 style="margin-top:12px">🚨 AbuseIPDB · IPs</h4>`;
+    html += abuse.ips.map((r) => {
+      const score = r.abuse_confidence_score ?? 0;
+      const cls = score === 0 ? "safe" : score < 25 ? "suspicious" : "malicious";
+      const label = r.error ? escapeHtml(r.error) : `${score}% abuse confidence`;
+      return `<div class="url-item">
+        <div class="url">${escapeHtml(r.ip || "")}</div>
+        <div class="meta">
+          <span class="badge ${cls}">${label}</span>
+          ${r.country_code ? `<span class="module-tag">${escapeHtml(r.country_code)}</span>` : ""}
+          ${r.isp ? `<span class="module-tag">${escapeHtml(r.isp)}</span>` : ""}
+          ${r.total_reports !== undefined ? `<span class="module-tag">${r.total_reports} reports</span>` : ""}
+          <a class="ti-link" target="_blank"
+             href="https://www.abuseipdb.com/check/${encodeURIComponent(r.ip || "")}">Open in AbuseIPDB ↗</a>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  if ((!vt.urls || !vt.urls.length) &&
+      (!vt.ips || !vt.ips.length) &&
+      (!abuse.ips || !abuse.ips.length)) {
+    html += `<p class="muted">No IPs or URLs in this analysis to enrich.</p>`;
+  }
+
+  html += `</div>`;
+  zone.innerHTML = html;
 }
 
 /* ---- banner ---- */
@@ -226,7 +334,7 @@ function renderBanner(a) {
   `;
 }
 
-/* ---- auth summary (MXToolbox-like) ---- */
+/* ---- auth summary ---- */
 function renderAuthSummary(a) {
   const s = a.auth_summary || {};
   const rows = [
@@ -256,14 +364,13 @@ function passFailUnknown(present, pass) {
   return `<span class="badge suspicious">UNKNOWN</span>`;
 }
 
-/* ---- hops (MXToolbox-style) ---- */
+/* ---- hops ---- */
 function renderHops(a) {
   const hops = a.hops || [];
   if (!hops.length) {
     return `<div class="result-card"><h4>Relay Information</h4><p class="muted">No Received headers parsed.</p></div>`;
   }
 
-  // Total delay = sum of per-hop delays
   const totalDelay = hops.reduce((sum, h) => sum + (h.delay_seconds || 0), 0);
 
   const rows = hops.map((h) => {
@@ -337,7 +444,7 @@ function formatAddress(entry) {
   return name ? `${name} <${email}>` : email;
 }
 
-/* ---- full headers (MXToolbox-style) ---- */
+/* ---- full headers ---- */
 function renderFullHeaders(a) {
   const list = a.full_headers || [];
   if (!list.length) {
@@ -367,7 +474,7 @@ function renderTriggered(a) {
   return `<div class="result-card"><h4>Triggered Features</h4><ul class="flag-list">${items}</ul></div>`;
 }
 
-/* ---- URLs (grouped) ---- */
+/* ---- URLs ---- */
 function renderUrlsCard(a) {
   const urls = a.urls_found || [];
   if (!urls.length) {
@@ -405,13 +512,21 @@ function renderUrlsCard(a) {
       const flagText = uniqueFlags.length
         ? " · ⚠ " + uniqueFlags.map(escapeHtml).join(" · ")
         : "";
+      const vtUrl = "https://www.virustotal.com/gui/url/" + b64url(full);
+      const vtDomain = u.domain ? "https://www.virustotal.com/gui/domain/" + encodeURIComponent(u.domain) : null;
       html += `<div class="url-item">
         <div class="url">${escapeHtml(preview)}</div>
         <details class="url-details">
           <summary>show full URL</summary>
           <pre class="raw-pre small-pre">${escapeHtml(full)}</pre>
         </details>
-        <div class="meta">Score: ${u.score}${flagText}</div>
+        <div class="meta">
+          Score: ${u.score}${flagText}
+          <div class="ti-links">
+            <a class="ti-link" target="_blank" href="${vtUrl}">🦠 VirusTotal (URL)</a>
+            ${vtDomain ? `<a class="ti-link" target="_blank" href="${vtDomain}">🦠 VirusTotal (domain)</a>` : ""}
+          </div>
+        </div>
       </div>`;
     });
 
@@ -421,7 +536,7 @@ function renderUrlsCard(a) {
   return `<div class="result-card"><h4>URLs Found</h4>${html}</div>`;
 }
 
-/* ---- Encoded / obfuscated URLs card ---- */
+/* ---- Encoded card ---- */
 function renderEncodedCard(a) {
   const urls = a.urls_found || [];
   const encoded = urls.filter((u) =>
@@ -472,6 +587,11 @@ function renderIpsCard(a) {
         <span class="badge ${cls}">${i.public ? "PUBLIC" : "PRIVATE"}</span>
         ${tags.map((t) => `<span class="module-tag">${t}</span>`).join(" ")}
       </div>
+      ${i.public ? `
+        <div class="ti-links">
+          <a class="ti-link" target="_blank" href="https://www.virustotal.com/gui/ip-address/${encodeURIComponent(i.ip)}">🦠 VirusTotal</a>
+          <a class="ti-link" target="_blank" href="https://www.abuseipdb.com/check/${encodeURIComponent(i.ip)}">🚨 AbuseIPDB</a>
+        </div>` : ""}
     </div>`;
   }).join("");
   return `<div class="result-card"><h4>IP Addresses Found</h4>${items}</div>`;
@@ -488,6 +608,7 @@ function renderAttachmentsCard(a) {
       <div class="url">${escapeHtml(at.filename || "")}</div>
       <div class="meta">${escapeHtml(at.content_type || "")} · ${at.size} bytes · Score: ${at.score}</div>
       ${(at.flags && at.flags.length) ? `<div class="meta">⚠ ${at.flags.map(escapeHtml).join(" · ")}</div>` : ""}
+      ${at.sha256 ? `<div class="ti-links"><a class="ti-link" target="_blank" href="https://www.virustotal.com/gui/file/${encodeURIComponent(at.sha256)}">🦠 VirusTotal (hash)</a></div>` : ""}
     </div>
   `).join("");
   return `<div class="result-card"><h4>Attachments</h4>${items}</div>`;
@@ -527,6 +648,13 @@ function cleanFlag(flagText, fullUrl) {
 }
 function getGroupScore(items) {
   return Math.max(...items.map((i) => i.score || 0));
+}
+function b64url(str) {
+  try {
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  } catch (e) {
+    return encodeURIComponent(str);
+  }
 }
 
 /* ---------------- Data loads ---------------- */
