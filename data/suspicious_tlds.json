@@ -1,0 +1,25 @@
+{
+  "high_risk": [
+    "tk", "ml", "ga", "cf", "gq",
+    "top", "xyz", "work", "click", "link",
+    "country", "stream", "download", "loan",
+    "bid", "trade", "webcam", "science",
+    "party", "review", "date", "racing",
+    "win", "men", "accountant", "cricket"
+  ],
+  "medium_risk": [
+    "info", "biz", "online", "site", "website",
+    "space", "store", "shop", "live", "icu",
+    "vip", "club", "fun", "pro", "monster"
+  ],
+  "url_shorteners": [
+    "bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly",
+    "is.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
+    "tiny.cc", "lnkd.in", "rb.gy", "shorte.st", "adf.ly"
+  ],
+  "free_hosting": [
+    "000webhostapp.com", "weebly.com", "wixsite.com",
+    "blogspot.com", "wordpress.com", "github.io",
+    "netlify.app", "vercel.app", "glitch.me", "repl.co"
+  ]
+}

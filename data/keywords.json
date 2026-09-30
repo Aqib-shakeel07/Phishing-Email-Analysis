@@ -1,0 +1,48 @@
+{
+  "urgency": [
+    "act now", "act immediately", "urgent", "immediate action",
+    "within 24 hours", "within 48 hours", "expires today",
+    "limited time", "last warning", "final notice", "hurry",
+    "time sensitive", "respond immediately", "as soon as possible"
+  ],
+  "threat": [
+    "account suspended", "account locked", "account closed",
+    "account deactivated", "account terminated", "legal action",
+    "permanent closure", "unauthorized access", "suspicious activity",
+    "security alert", "breach detected", "will be deleted",
+    "service discontinued", "account will be blocked"
+  ],
+  "credential_request": [
+    "verify your account", "confirm your identity", "update your password",
+    "reset your password", "login credentials", "enter your password",
+    "confirm your password", "otp", "one-time password",
+    "card number", "cvv", "ssn", "social security",
+    "pin number", "security code", "credit card details",
+    "bank account details", "billing information"
+  ],
+  "reward": [
+    "you have won", "congratulations", "claim your prize",
+    "free gift", "lottery", "winner", "cash reward",
+    "refund pending", "tax refund", "inheritance"
+  ],
+  "financial": [
+    "wire transfer", "payment required", "invoice attached",
+    "outstanding balance", "unpaid invoice", "billing error",
+    "payment failed", "transaction declined", "purchase confirmation"
+  ],
+  "greeting_generic": [
+    "dear customer", "dear user", "dear valued customer",
+    "dear account holder", "dear member", "dear client",
+    "dear sir/madam"
+  ],
+  "action_buttons": [
+    "click here", "click below", "login here", "sign in here",
+    "verify now", "update now", "confirm now", "unlock account",
+    "reactivate account", "click this link"
+  ],
+  "delivery_scam": [
+    "package pending", "delivery failed", "shipment on hold",
+    "customs clearance", "reschedule delivery", "tracking number",
+    "parcel waiting", "redelivery fee"
+  ]
+}
