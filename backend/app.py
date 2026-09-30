@@ -20,6 +20,7 @@ from header_analyzer import HeaderAnalyzer, parse_email_bytes
 from url_analyzer import URLAnalyzer
 from content_analyzer import ContentAnalyzer
 from attachment_analyzer import AttachmentAnalyzer
+from encoded_analyzer import EncodedAnalyzer
 from scoring_engine import ScoringEngine
 from virustotal_api import VirusTotalClient
 from abuseipdb_api import AbuseIPDBClient
@@ -38,6 +39,7 @@ header_analyzer = HeaderAnalyzer()
 url_analyzer = URLAnalyzer()
 content_analyzer = ContentAnalyzer()
 attachment_analyzer = AttachmentAnalyzer(virustotal_client=vt_client)
+encoded_analyzer = EncodedAnalyzer()
 scoring_engine = ScoringEngine()
 ml_classifier = MLClassifier()
 report_generator = ReportGenerator()
@@ -58,19 +60,38 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
 
     header_res = header_analyzer.analyze(msg)
 
-    full_text = _get_all_text(msg) + "\n" + _get_all_html(msg)
+    text_body = _get_all_text(msg)
+    html_body = _get_all_html(msg)
+    full_text = text_body + "\n" + html_body
+
     url_text_res = url_analyzer.analyze_text(full_text)
     url_html_res = _analyze_html_urls(msg)
     url_res = _merge_url_results(url_text_res, url_html_res)
 
     content_res = content_analyzer.analyze(msg)
     attachment_res = attachment_analyzer.analyze(msg)
+    encoded_res = encoded_analyzer.analyze(
+        raw_bytes, msg=msg, html=html_body, text=text_body
+    )
 
     ml_score = ml_classifier.predict(header_res, url_res, content_res, attachment_res)
 
     final = scoring_engine.compute(
         header_res, url_res, content_res, attachment_res, ml_score
     )
+
+    if encoded_res.get("score", 0) > 0:
+        final["final_score"] = clamp(final.get("final_score", 0) + encoded_res["score"] * 0.2)
+        final["verdict"] = score_to_verdict(final["final_score"])
+        summary = encoded_res.get("summary", {})
+        final["triggered_features"].append({
+            "module": "encoded",
+            "detail": f"{encoded_res['count']} encoded blob(s) "
+                      f"(base64={summary.get('base64',0)}, "
+                      f"QP={summary.get('quoted_printable',0)}, "
+                      f"URL={summary.get('url_encoded',0)}, "
+                      f"hex={summary.get('hex',0)})"
+        })
 
     analysis = {
         "filename": filename,
@@ -104,6 +125,7 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "url_score": url_res.get("score", 0),
         "content_score": content_res.get("score", 0),
         "attachment_score": attachment_res.get("score", 0),
+        "encoded_score": encoded_res.get("score", 0),
         "ml_score": ml_score,
 
         "final_score": final.get("final_score", 0),
@@ -115,6 +137,9 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "urls_found": url_res.get("urls", []),
         "ips_found": url_res.get("ips", []),
         "attachments": attachment_res.get("attachments", []),
+        "encoded_found": encoded_res.get("items", []),
+        "encoded_summary": encoded_res.get("summary", {}),
+        "encoded_full_dump": encoded_res.get("full_dump", {}),   # ← NEW
         "matched_keywords": content_res.get("matched_keywords", {}),
         "raw_headers": _stringify_headers(msg),
     }
@@ -384,14 +409,10 @@ def api_abuse_ip():
     return jsonify(abuse_client.check_ip(ip, max_age_days=days))
 
 
-# ---------------- Enrichment (auto VT + Abuse for a saved analysis) ----------------
+# ---------------- Enrichment ----------------
 
 @app.route("/api/enrich/<int:analysis_id>", methods=["GET"])
 def api_enrich(analysis_id):
-    """
-    For a saved analysis, run VT + AbuseIPDB on all its URLs and IPs.
-    Returns a combined report. Cached server-side.
-    """
     row = get_analysis(analysis_id)
     if not row:
         return jsonify({"error": "not found"}), 404
@@ -400,11 +421,10 @@ def api_enrich(analysis_id):
     urls = a.get("urls_found", []) or []
     ips = a.get("ips_found", []) or []
 
-    # URL lookups (VirusTotal)
     vt_urls = []
     if vt_client.is_ready():
         seen = set()
-        for u in urls[:10]:  # cap to avoid rate limits
+        for u in urls[:10]:
             link = u.get("url")
             if not link or link in seen:
                 continue
@@ -414,7 +434,6 @@ def api_enrich(analysis_id):
             except Exception as e:
                 vt_urls.append({"url": link, "error": str(e)})
 
-    # IP lookups (VirusTotal + AbuseIPDB)
     vt_ips = []
     abuse_ips = []
     seen_ips = set()
@@ -482,6 +501,7 @@ def _row_to_dict(row) -> dict:
         "url_score": row.url_score,
         "content_score": row.content_score,
         "attachment_score": row.attachment_score,
+        "encoded_score": getattr(row, "encoded_score", 0.0),
         "ml_score": row.ml_score,
         "final_score": row.final_score,
         "verdict": row.verdict,
@@ -491,11 +511,14 @@ def _row_to_dict(row) -> dict:
             "url": row.url_score,
             "content": row.content_score,
             "attachment": row.attachment_score,
+            "encoded": getattr(row, "encoded_score", 0.0),
             "ml": row.ml_score,
         },
         "urls_found": row.urls_found or [],
         "ips_found": getattr(row, "ips_found", None) or [],
         "attachments": row.attachments or [],
+        "encoded_found": getattr(row, "encoded_found", None) or [],
+        "encoded_full_dump": getattr(row, "encoded_full_dump", None) or {},   # ← NEW
         "triggered_features": row.triggered_features or [],
         "raw_headers": row.raw_headers,
         "created_at": row.created_at.isoformat() if row.created_at else None,

@@ -23,7 +23,6 @@ def save_analysis(data: dict) -> int:
         record = EmailAnalysis(
             filename=data.get("filename"),
 
-            # From / To
             sender=data.get("sender"),
             sender_name=data.get("sender_name"),
             sender_domain=data.get("sender_domain"),
@@ -38,12 +37,10 @@ def save_analysis(data: dict) -> int:
             message_id=data.get("message_id"),
             received_chain=_to_json_safe(data.get("received_chain")),
 
-            # NEW: MXToolbox-style data
             hops=_to_json_safe(data.get("hops")),
             full_headers=_to_json_safe(data.get("full_headers")),
             auth_summary=_to_json_safe(data.get("auth_summary")),
 
-            # Auth
             spf_present=data.get("spf_present"),
             spf_pass=data.get("spf_pass"),
             dkim_present=data.get("dkim_present"),
@@ -52,19 +49,20 @@ def save_analysis(data: dict) -> int:
             dmarc_pass=data.get("dmarc_pass"),
             auth_headers_raw=data.get("auth_headers_raw"),
 
-            # Scores
             header_score=data.get("header_score", 0.0),
             url_score=data.get("url_score", 0.0),
             content_score=data.get("content_score", 0.0),
             attachment_score=data.get("attachment_score", 0.0),
+            encoded_score=data.get("encoded_score", 0.0),
             ml_score=data.get("ml_score", 0.0),
             final_score=data.get("final_score", 0.0),
             verdict=data.get("verdict", "Unknown"),
 
-            # Contents
             urls_found=_to_json_safe(data.get("urls_found")),
             ips_found=_to_json_safe(data.get("ips_found")),
             attachments=_to_json_safe(data.get("attachments")),
+            encoded_found=_to_json_safe(data.get("encoded_found")),
+            encoded_full_dump=_to_json_safe(data.get("encoded_full_dump")),   # ← NEW
             triggered_features=_to_json_safe(data.get("triggered_features")),
             raw_headers=data.get("raw_headers"),
         )
@@ -131,8 +129,6 @@ def get_stats():
         db.close()
 
 
-# ---------------- Cache ----------------
-
 def cache_get(key: str):
     db = SessionLocal()
     try:
@@ -155,8 +151,6 @@ def cache_set(key: str, value):
     finally:
         db.close()
 
-
-# ---------------- Brand domains ----------------
 
 def load_brand_domains(brands: list):
     db = SessionLocal()

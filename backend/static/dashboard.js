@@ -7,6 +7,8 @@ let currentResultId = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
+  initBackground();
+  initSpotlight();
   loadAll();
 });
 
@@ -21,7 +23,6 @@ function bindEvents() {
   if (searchInput) searchInput.addEventListener("input", applyFilters);
   if (verdictFilter) verdictFilter.addEventListener("change", applyFilters);
 
-  // Sidebar filters
   const navAll = $("navAll");
   const navSafe = $("navSafe");
   const navSuspicious = $("navSuspicious");
@@ -31,11 +32,9 @@ function bindEvents() {
   if (navSuspicious) navSuspicious.onclick = (e) => { e.preventDefault(); if (verdictFilter) verdictFilter.value = "Suspicious"; applyFilters(); };
   if (navPhishing) navPhishing.onclick = (e) => { e.preventDefault(); if (verdictFilter) verdictFilter.value = "Phishing"; applyFilters(); };
 
-  // Export
   const exportBtn = $("exportBtn");
   if (exportBtn) exportBtn.onclick = exportJson;
 
-  // Scan modal
   const newScanBtn = $("newScanBtn");
   const openScanModal = $("openScanModal");
   const promoScanBtn = $("promoScanBtn");
@@ -75,7 +74,6 @@ function bindEvents() {
     });
   }
 
-  // Result modal
   const closeResultModal = $("closeResultModal");
   const resultCloseBtn = $("resultCloseBtn");
   const resultJsonBtn = $("resultJsonBtn");
@@ -95,6 +93,99 @@ function bindEvents() {
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { closeModal(); closeResult(); }
+  });
+
+  if (resultModal) {
+    resultModal.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-copy]");
+      if (!btn) return;
+      const idx = btn.getAttribute("data-copy");
+      const pre = document.getElementById(`decoded-full-${idx}`);
+      if (!pre) return;
+      const text = pre.textContent || "";
+      navigator.clipboard.writeText(text).then(() => {
+        const old = btn.textContent;
+        btn.textContent = "✓ Copied";
+        setTimeout(() => (btn.textContent = old), 1200);
+      });
+    });
+  }
+
+  // Ripple on buttons
+  document.querySelectorAll(".btn").forEach(attachRipple);
+}
+
+/* ---------------- Background canvas ---------------- */
+
+let fxCanvas, fxCtx, fxParticles = [], fxW = 0, fxH = 0;
+
+function initBackground() {
+  fxCanvas = $("fx");
+  if (!fxCanvas) return;
+  fxCtx = fxCanvas.getContext("2d");
+  resizeFx();
+  window.addEventListener("resize", () => { resizeFx(); initFxParticles(); });
+  initFxParticles();
+  drawFx();
+}
+
+function resizeFx() {
+  fxW = fxCanvas.width = window.innerWidth;
+  fxH = fxCanvas.height = window.innerHeight;
+}
+
+function initFxParticles() {
+  const count = Math.min(60, Math.floor(fxW * fxH / 26000));
+  fxParticles = [];
+  for (let i = 0; i < count; i++) {
+    fxParticles.push({
+      x: Math.random() * fxW,
+      y: Math.random() * fxH,
+      vx: (Math.random() - 0.5) * 0.25,
+      vy: (Math.random() - 0.5) * 0.25,
+      r: 0.8 + Math.random() * 1.2,
+    });
+  }
+}
+
+function drawFx() {
+  if (!fxCtx) return;
+  fxCtx.clearRect(0, 0, fxW, fxH);
+  for (let i = 0; i < fxParticles.length; i++) {
+    const p = fxParticles[i];
+    p.x += p.vx; p.y += p.vy;
+    if (p.x < 0 || p.x > fxW) p.vx *= -1;
+    if (p.y < 0 || p.y > fxH) p.vy *= -1;
+
+    fxCtx.beginPath();
+    fxCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    fxCtx.fillStyle = "rgba(140, 180, 255, 0.5)";
+    fxCtx.fill();
+
+    for (let j = i + 1; j < fxParticles.length; j++) {
+      const q = fxParticles[j];
+      const dx = p.x - q.x;
+      const dy = p.y - q.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 140) {
+        fxCtx.beginPath();
+        fxCtx.moveTo(p.x, p.y);
+        fxCtx.lineTo(q.x, q.y);
+        fxCtx.strokeStyle = `rgba(140, 180, 255, ${0.12 * (1 - d / 140)})`;
+        fxCtx.lineWidth = 0.5;
+        fxCtx.stroke();
+      }
+    }
+  }
+  requestAnimationFrame(drawFx);
+}
+
+function initSpotlight() {
+  const spotlight = $("spotlight");
+  if (!spotlight) return;
+  document.addEventListener("mousemove", (e) => {
+    spotlight.style.left = e.clientX + "px";
+    spotlight.style.top = e.clientY + "px";
   });
 }
 
@@ -205,6 +296,7 @@ function showResult(a) {
     ${renderTriggered(a)}
     ${renderUrlsCard(a)}
     ${renderEncodedCard(a)}
+    ${renderEncodedContentCard(a)}
     ${renderIpsCard(a)}
     ${renderAttachmentsCard(a)}
     ${renderRawHeaders(a)}
@@ -215,7 +307,8 @@ function showResult(a) {
   if (overlay) overlay.classList.remove("hidden");
 }
 
-/* ---- Enrich with VT + AbuseIPDB ---- */
+/* ---------------- Enrichment ---------------- */
+
 async function runEnrichment() {
   if (!currentResultId) return;
   const zone = $("enrichmentZone");
@@ -249,32 +342,30 @@ function renderEnrichment(zone, data) {
     return;
   }
 
-  // VT URLs
   if (vt.urls && vt.urls.length) {
     html += `<h4 style="margin-top:12px">🦠 VirusTotal · URLs</h4>`;
     html += vt.urls.map((u) => {
       const pos = u.positives ?? 0;
       const tot = u.total_engines ?? 0;
-      const cls = pos === 0 ? "safe" : pos / Math.max(tot, 1) < 0.05 ? "suspicious" : "malicious";
+      const cls = pos === 0 ? "safe" : pos / Math.max(tot, 1) < 0.05 ? "suspicious" : "phishing";
       const label = u.error ? escapeHtml(u.error) : `${pos}/${tot} flags`;
       return `<div class="url-item">
         <div class="url">${escapeHtml(shortenUrl(u.url || ""))}</div>
         <div class="meta">
           <span class="badge ${cls}">${label}</span>
           <a class="ti-link" target="_blank"
-             href="https://www.virustotal.com/gui/url/${encodeURIComponent(btoa(u.url || "").replace(/=+$/, ""))}">Open in VirusTotal ↗</a>
+             href="https://www.virustotal.com/gui/url/${b64url(u.url || "")}">Open in VirusTotal ↗</a>
         </div>
       </div>`;
     }).join("");
   }
 
-  // VT IPs
   if (vt.ips && vt.ips.length) {
     html += `<h4 style="margin-top:12px">🦠 VirusTotal · IPs</h4>`;
     html += vt.ips.map((r) => {
       const pos = r.positives ?? 0;
       const tot = r.total_engines ?? 0;
-      const cls = pos === 0 ? "safe" : pos / Math.max(tot, 1) < 0.05 ? "suspicious" : "malicious";
+      const cls = pos === 0 ? "safe" : pos / Math.max(tot, 1) < 0.05 ? "suspicious" : "phishing";
       const label = r.error ? escapeHtml(r.error) : `${pos}/${tot} flags`;
       return `<div class="url-item">
         <div class="url">${escapeHtml(r.ip || "")}</div>
@@ -289,12 +380,11 @@ function renderEnrichment(zone, data) {
     }).join("");
   }
 
-  // AbuseIPDB IPs
   if (abuse.ips && abuse.ips.length) {
     html += `<h4 style="margin-top:12px">🚨 AbuseIPDB · IPs</h4>`;
     html += abuse.ips.map((r) => {
       const score = r.abuse_confidence_score ?? 0;
-      const cls = score === 0 ? "safe" : score < 25 ? "suspicious" : "malicious";
+      const cls = score === 0 ? "safe" : score < 25 ? "suspicious" : "phishing";
       const label = r.error ? escapeHtml(r.error) : `${score}% abuse confidence`;
       return `<div class="url-item">
         <div class="url">${escapeHtml(r.ip || "")}</div>
@@ -320,7 +410,8 @@ function renderEnrichment(zone, data) {
   zone.innerHTML = html;
 }
 
-/* ---- banner ---- */
+/* ---------------- Result renderers ---------------- */
+
 function renderBanner(a) {
   const cls = (a.verdict || "Unknown").toLowerCase();
   return `
@@ -334,7 +425,6 @@ function renderBanner(a) {
   `;
 }
 
-/* ---- auth summary ---- */
 function renderAuthSummary(a) {
   const s = a.auth_summary || {};
   const rows = [
@@ -364,7 +454,6 @@ function passFailUnknown(present, pass) {
   return `<span class="badge suspicious">UNKNOWN</span>`;
 }
 
-/* ---- hops ---- */
 function renderHops(a) {
   const hops = a.hops || [];
   if (!hops.length) {
@@ -399,14 +488,7 @@ function renderHops(a) {
     <div class="mx-table-wrap">
       <table class="mx-table">
         <thead>
-          <tr>
-            <th>Hop</th>
-            <th>Delay</th>
-            <th>From</th>
-            <th>By</th>
-            <th>With</th>
-            <th>Time (UTC)</th>
-          </tr>
+          <tr><th>Hop</th><th>Delay</th><th>From</th><th>By</th><th>With</th><th>Time (UTC)</th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
@@ -414,7 +496,6 @@ function renderHops(a) {
   </div>`;
 }
 
-/* ---- header info ---- */
 function renderHeaderCard(a) {
   const toList = (a.to || []).map(formatAddress).join(", ") || "—";
   const ccList = (a.cc || []).map(formatAddress).join(", ") || "—";
@@ -444,7 +525,6 @@ function formatAddress(entry) {
   return name ? `${name} <${email}>` : email;
 }
 
-/* ---- full headers ---- */
 function renderFullHeaders(a) {
   const list = a.full_headers || [];
   if (!list.length) {
@@ -462,7 +542,6 @@ function renderFullHeaders(a) {
   </div>`;
 }
 
-/* ---- triggered ---- */
 function renderTriggered(a) {
   const flags = a.triggered_features || [];
   if (!flags.length) {
@@ -474,7 +553,6 @@ function renderTriggered(a) {
   return `<div class="result-card"><h4>Triggered Features</h4><ul class="flag-list">${items}</ul></div>`;
 }
 
-/* ---- URLs ---- */
 function renderUrlsCard(a) {
   const urls = a.urls_found || [];
   if (!urls.length) {
@@ -536,7 +614,6 @@ function renderUrlsCard(a) {
   return `<div class="result-card"><h4>URLs Found</h4>${html}</div>`;
 }
 
-/* ---- Encoded card ---- */
 function renderEncodedCard(a) {
   const urls = a.urls_found || [];
   const encoded = urls.filter((u) =>
@@ -567,7 +644,131 @@ function renderEncodedCard(a) {
   return `<div class="result-card"><h4>Encoded / Obfuscated URLs</h4>${items}</div>`;
 }
 
-/* ---- IPs ---- */
+function renderEncodedContentCard(a) {
+  const items = a.encoded_found || [];
+  const dump = a.encoded_full_dump || {};
+
+  if (!items.length && !dump.raw_eml) {
+    return `<div class="result-card"><h4>Encoded Content</h4><p class="muted">No encoded blobs detected.</p></div>`;
+  }
+
+  let html = "";
+  const summary = a.encoded_summary || {};
+  const summaryLine = Object.entries(summary)
+    .filter(([_, v]) => v > 0)
+    .map(([k, v]) => `${k.replace(/_/g, " ")}=${v}`)
+    .join(" · ");
+
+  html += `<div class="enc-header-row">
+    <h4>Encoded Content (${items.length})</h4>
+    <div class="enc-badges">
+      ${summary.mime_parts ? `<span class="badge suspicious">${summary.mime_parts} MIME</span>` : ""}
+      ${summary.base64 ? `<span class="badge suspicious">${summary.base64} base64</span>` : ""}
+      ${summary.quoted_printable ? `<span class="badge suspicious">${summary.quoted_printable} QP</span>` : ""}
+      ${summary.url_encoded ? `<span class="badge suspicious">${summary.url_encoded} URL-enc</span>` : ""}
+      ${summary.hex ? `<span class="badge suspicious">${summary.hex} hex</span>` : ""}
+      ${summary.rfc2047_headers ? `<span class="badge suspicious">${summary.rfc2047_headers} RFC2047</span>` : ""}
+      ${summary.html_entities ? `<span class="badge suspicious">${summary.html_entities} HTML-ent</span>` : ""}
+    </div>
+  </div>`;
+  if (summaryLine) html += `<p class="muted" style="margin-bottom:10px">${escapeHtml(summaryLine)}</p>`;
+
+  if (dump.raw_eml) {
+    html += `<div class="dump-section">
+      <div class="dump-head">
+        <strong>📄 Full Raw .eml Dump</strong>
+        <span class="muted">${dump.raw_eml_size ?? 0} bytes${dump.raw_eml_truncated ? " (truncated)" : ""}</span>
+      </div>
+      <details class="dump-details" id="rawEmlDump">
+        <summary>Show complete raw .eml file</summary>
+        <div class="dump-actions">
+          <button class="copy-btn" data-copy="raweml">📋 Copy entire .eml</button>
+        </div>
+        <pre class="raw-pre" id="decoded-full-raweml">${escapeHtml(dump.raw_eml)}</pre>
+      </details>
+    </div>`;
+  }
+
+  if (items.length) {
+    const groups = {};
+    items.forEach((it) => {
+      const t = it.type || "unknown";
+      if (!groups[t]) groups[t] = [];
+      groups[t].push(it);
+    });
+
+    const order = ["mime-part", "rfc2047-header", "base64", "quoted-printable", "url-encoded", "hex-escape", "hex-0x", "html-entities"];
+    const present = Object.keys(groups).sort((a, b) => {
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+
+    let globalIndex = 0;
+
+    present.forEach((type) => {
+      const list = groups[type];
+      html += `<div class="enc-group">
+        <div class="enc-group-head">
+          <span class="enc-type">${escapeHtml(typeLabel(type))}</span>
+          <span class="badge suspicious">${list.length} item${list.length > 1 ? "s" : ""}</span>
+        </div>`;
+
+      list.forEach((it) => {
+        const idx = globalIndex++;
+        html += `<div class="url-item enc-item">
+          <div class="enc-meta">
+            <span class="module-tag">${escapeHtml(it.encoding || type)}</span>
+            <span class="muted">source: ${escapeHtml(it.source || "—")}</span>
+            ${it.size_raw ? `<span class="muted">· ${it.size_raw} raw</span>` : ""}
+            ${it.size_decoded ? `<span class="muted">· ${it.size_decoded} decoded</span>` : ""}
+            ${it.binary ? `<span class="badge suspicious">binary</span>` : ""}
+          </div>
+
+          <details class="url-details">
+            <summary>Raw (encoded)</summary>
+            <div class="dump-actions">
+              <button class="copy-btn" data-copy="${idx}">📋 Copy raw</button>
+            </div>
+            <pre class="raw-pre small-pre" id="decoded-full-${idx}">${escapeHtml(it.raw || "")}</pre>
+          </details>
+
+          <div class="enc-decoded-head">
+            <span class="muted">Decoded preview:</span>
+          </div>
+          <pre class="raw-pre small-pre">${escapeHtml(it.decoded_preview || it.decoded_full || "")}</pre>
+
+          ${(it.decoded_full && it.decoded_full.length > (it.decoded_preview || "").length) ? `
+            <details class="url-details">
+              <summary>Show full decoded content</summary>
+              <div class="dump-actions">
+                <button class="copy-btn" data-copy="decoded-${idx}">📋 Copy decoded</button>
+              </div>
+              <pre class="raw-pre small-pre" id="decoded-full-decoded-${idx}">${escapeHtml(it.decoded_full)}</pre>
+            </details>
+          ` : ""}
+        </div>`;
+      });
+
+      html += `</div>`;
+    });
+  }
+
+  return `<div class="result-card">${html}</div>`;
+}
+
+function typeLabel(t) {
+  return {
+    "base64": "Base64",
+    "mime-part": "MIME Part",
+    "rfc2047-header": "RFC 2047 Header",
+    "quoted-printable": "Quoted-Printable",
+    "url-encoded": "URL-encoded",
+    "hex-escape": "Hex (\\xNN)",
+    "hex-0x": "Hex (0xNN)",
+    "html-entities": "HTML Entities",
+  }[t] || t;
+}
+
 function renderIpsCard(a) {
   const ips = a.ips_found || [];
   if (!ips.length) {
@@ -597,7 +798,6 @@ function renderIpsCard(a) {
   return `<div class="result-card"><h4>IP Addresses Found</h4>${items}</div>`;
 }
 
-/* ---- attachments ---- */
 function renderAttachmentsCard(a) {
   const atts = a.attachments || [];
   if (!atts.length) {
@@ -614,7 +814,6 @@ function renderAttachmentsCard(a) {
   return `<div class="result-card"><h4>Attachments</h4>${items}</div>`;
 }
 
-/* ---- raw headers ---- */
 function renderRawHeaders(a) {
   if (!a.raw_headers) {
     return `<div class="result-card"><h4>Raw Headers</h4><p class="muted">(none)</p></div>`;
@@ -622,19 +821,22 @@ function renderRawHeaders(a) {
   return `<div class="result-card">
     <h4>Raw Headers</h4>
     <details>
-      <summary style="cursor:pointer;color:var(--accent)">Show / hide raw email headers</summary>
+      <summary style="cursor:pointer;color:var(--accent-2)">Show / hide raw email headers</summary>
       <pre class="raw-pre">${escapeHtml(a.raw_headers)}</pre>
     </details>
   </div>`;
 }
 
-/* ---- helpers ---- */
+/* ---------------- Helpers ---------------- */
+
 const URL_PREVIEW_LEN = 90;
+
 function shortenUrl(url) {
   if (!url) return "";
   if (url.length <= URL_PREVIEW_LEN) return url;
   return url.slice(0, 55) + "…" + url.slice(-25) + `  [${url.length} chars]`;
 }
+
 function cleanFlag(flagText, fullUrl) {
   if (!flagText) return "";
   let t = flagText;
@@ -646,15 +848,38 @@ function cleanFlag(flagText, fullUrl) {
   t = t.replace(/\s{2,}/g, " ").trim();
   return t;
 }
+
 function getGroupScore(items) {
   return Math.max(...items.map((i) => i.score || 0));
 }
+
 function b64url(str) {
   try {
     return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   } catch (e) {
     return encodeURIComponent(str);
   }
+}
+
+function attachRipple(el) {
+  el.addEventListener("click", (e) => {
+    const circle = document.createElement("span");
+    const d = Math.max(el.clientWidth, el.clientHeight);
+    const rect = el.getBoundingClientRect();
+    circle.style.position = "absolute";
+    circle.style.borderRadius = "50%";
+    circle.style.transform = "scale(0)";
+    circle.style.animation = "ripple 0.6s linear";
+    circle.style.background = "rgba(255,255,255,0.35)";
+    circle.style.pointerEvents = "none";
+    circle.style.width = circle.style.height = `${d}px`;
+    circle.style.left = `${e.clientX - rect.left - d / 2}px`;
+    circle.style.top = `${e.clientY - rect.top - d / 2}px`;
+    el.style.position = "relative";
+    el.style.overflow = "hidden";
+    el.appendChild(circle);
+    setTimeout(() => circle.remove(), 650);
+  });
 }
 
 /* ---------------- Data loads ---------------- */
@@ -671,15 +896,28 @@ async function loadStats() {
     const safe = data.safe ?? 0;
     const sus = data.suspicious ?? 0;
     const phish = data.phishing ?? 0;
-    setText("statTotal", total);
-    setText("statSafe", safe);
-    setText("statSuspicious", sus);
-    setText("statPhishing", phish);
+    animateCounter("statTotal", total);
+    animateCounter("statSafe", safe);
+    animateCounter("statSuspicious", sus);
+    animateCounter("statPhishing", phish);
     renderCharts({ total, safe, sus, phish });
   } catch (err) { console.error("stats failed", err); }
 }
 
-function setText(id, value) { const el = $(id); if (el) el.textContent = value; }
+function animateCounter(id, target) {
+  const el = $(id);
+  if (!el) return;
+  const from = parseInt(el.textContent.replace(/[^0-9]/g, ""), 10) || 0;
+  const duration = 700;
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = Math.floor(from + (target - from) * eased).toLocaleString();
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
 
 function renderCharts({ total, safe, sus, phish }) {
   const max = Math.max(safe, sus, phish, 1);
@@ -690,18 +928,32 @@ function renderCharts({ total, safe, sus, phish }) {
   const threats = sus + phish;
   const rate = total > 0 ? Math.round((threats / total) * 100) : 0;
   const donutValue = $("donutValue");
-  if (donutValue) donutValue.textContent = `${rate}%`;
   const donutFg = $("donutFg");
   if (donutFg) {
     const circ = 2 * Math.PI * 50;
     donutFg.style.strokeDasharray = circ;
     donutFg.style.strokeDashoffset = circ - (rate / 100) * circ;
   }
+  if (donutValue) {
+    let cur = 0;
+    const tick = () => {
+      cur += Math.max(1, Math.floor(rate / 40));
+      if (cur >= rate) { donutValue.textContent = `${rate}%`; return; }
+      donutValue.textContent = `${cur}%`;
+      requestAnimationFrame(tick);
+    };
+    tick();
+  }
 }
 
 function setBar(barId, valId, value, max) {
-  const bar = $(barId); const val = $(valId);
-  if (bar) bar.style.width = `${(value / max) * 100}%`;
+  const bar = $(barId);
+  const val = $(valId);
+  if (bar) {
+    const pct = max > 0 ? (value / max) * 100 : 0;
+    bar.style.width = `${pct}%`;
+    bar.setAttribute("data-w", pct);
+  }
   if (val) val.textContent = value;
 }
 
@@ -742,13 +994,15 @@ function renderTable(items) {
   }
   tbody.innerHTML = items.map((it) => {
     const cls = (it.verdict || "Unknown").toLowerCase();
+    const score = it.final_score ?? 0;
+    const scoreClass = score >= 60 ? "high" : score >= 30 ? "mid" : "low";
     const date = it.created_at ? new Date(it.created_at).toLocaleString() : "-";
-    return `<tr>
-      <td>#${it.id}</td>
-      <td>${escapeHtml(date)}</td>
-      <td>${escapeHtml(it.sender || "-")}</td>
-      <td class="subject-cell" title="${escapeHtml(it.subject || "")}">${escapeHtml(it.subject || "(no subject)")}</td>
-      <td>${it.final_score ?? 0}</td>
+    return `<tr data-id="${it.id}">
+      <td class="t-id">#${it.id}</td>
+      <td class="t-date">${escapeHtml(date)}</td>
+      <td class="t-sender">${escapeHtml(it.sender || "-")}</td>
+      <td class="t-subject" title="${escapeHtml(it.subject || "")}">${escapeHtml(it.subject || "(no subject)")}</td>
+      <td class="t-score ${scoreClass}">${score}</td>
       <td><span class="badge ${cls}">${escapeHtml(it.verdict || "Unknown")}</span></td>
       <td>
         <button class="icon-btn-row" data-action="view" data-id="${it.id}">View</button>
@@ -765,6 +1019,7 @@ function renderTable(items) {
 }
 
 async function onRowAction(e) {
+  e.stopPropagation();
   const action = e.currentTarget.dataset.action;
   const id = e.currentTarget.dataset.id;
   if (action === "view") {

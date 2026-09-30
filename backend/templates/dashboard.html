@@ -3,256 +3,280 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dashboard · Phishing Email Analyzer</title>
-  <link rel="stylesheet" href="/static/dashboard.css" />
+  <title>Dashboard · PhishGuard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/dashboard.css?v=3" />
 </head>
 <body>
-  <div class="layout">
-    <!-- ============ Sidebar ============ -->
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-logo">🛡️</div>
-        <div class="brand-name">PhishGuard</div>
+
+<!-- Animated background -->
+<div class="bg">
+  <div class="bg-gradient"></div>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+  <div class="bg-orb orb-3"></div>
+  <div class="bg-dots"></div>
+  <div class="bg-scan a"></div>
+  <div class="bg-scan b"></div>
+  <canvas id="fx"></canvas>
+</div>
+
+<!-- Cursor spotlight -->
+<div class="spotlight" id="spotlight"></div>
+
+<div class="app">
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">🛡</div>
+      <div class="brand-name">Phish<span>Guard</span></div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-label">Main</div>
+      <a href="/dashboard" class="nav-item active">
+        <span class="nav-icon">◆</span> Dashboard
+      </a>
+      <a href="#" class="nav-item" id="openScanModal">
+        <span class="nav-icon">↑</span> Analyze
+      </a>
+
+      <div class="nav-label" style="margin-top:14px">Insights</div>
+      <a href="#" class="nav-item" id="navAll">
+        <span class="nav-icon">≡</span> All Scans
+      </a>
+      <a href="#" class="nav-item" id="navSafe">
+        <span class="nav-dot dot-safe">✓</span> Safe
+      </a>
+      <a href="#" class="nav-item" id="navSuspicious">
+        <span class="nav-dot dot-warn">!</span> Suspicious
+      </a>
+      <a href="#" class="nav-item" id="navPhishing">
+        <span class="nav-dot dot-danger">—</span> Phishing
+      </a>
+
+      <div class="nav-label" style="margin-top:14px">Threat Intel</div>
+      <a href="/virustotal" class="nav-item">
+        <span class="nav-icon">◉</span> VirusTotal
+      </a>
+      <a href="/abuseipdb" class="nav-item">
+        <span class="nav-icon">◈</span> AbuseIPDB
+      </a>
+    </nav>
+
+    <div class="sidebar-card">
+      <div class="sidebar-card-title">Realtime Protection</div>
+      <div class="sidebar-card-text">Scan emails instantly for phishing signals.</div>
+      <a class="sidebar-card-cta" id="promoScanBtn">Run a scan →</a>
+    </div>
+  </aside>
+
+  <!-- ============ Main ============ -->
+  <main class="main">
+    <!-- Topbar -->
+    <header class="topbar">
+      <div>
+        <h1>Dashboard</h1>
+        <p class="topbar-sub">Monitor every scanned email and its verdict in real time.</p>
+      </div>
+      <div class="topbar-right">
+        <div class="search">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" id="searchInput" placeholder="Search sender / subject..." />
+        </div>
+        <button class="icon-btn" id="refreshBtn" title="Refresh">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="btn btn-primary" id="newScanBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Scan
+        </button>
+        <button class="btn btn-ghost" id="exportBtn">Export</button>
+        <div class="user-chip">
+          <div class="avatar">A</div>
+          <div>
+            <div class="user-name">Admin</div>
+            <div class="user-role">Security Analyst</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- KPI row -->
+    <section class="kpis">
+      <div class="kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">Total Scans</span>
+          <span class="kpi-icon">∑</span>
+        </div>
+        <div class="kpi-value" id="statTotal">0</div>
+        <div class="kpi-sub">All analyzed emails</div>
       </div>
 
-      <nav class="nav">
-        <div class="nav-section">MAIN</div>
-        <a href="/dashboard" class="nav-item active">
-          <span class="nav-icon">◆</span> Dashboard
-        </a>
-        <a href="#" class="nav-item" id="openScanModal">
-          <span class="nav-icon">⬆</span> Analyze
-        </a>
-
-        <div class="nav-section">INSIGHTS</div>
-        <a href="#" class="nav-item" id="navAll">
-          <span class="nav-icon">◈</span> All Scans
-        </a>
-        <a href="#" class="nav-item" id="navSafe">
-          <span class="nav-icon">✔</span> Safe
-        </a>
-        <a href="#" class="nav-item" id="navSuspicious">
-          <span class="nav-icon">⚠</span> Suspicious
-        </a>
-        <a href="#" class="nav-item" id="navPhishing">
-          <span class="nav-icon">⛔</span> Phishing
-        </a>
-
-        <div class="nav-section">THREAT INTEL</div>
-        <a href="/virustotal" class="nav-item">
-          <span class="nav-icon">🦠</span> VirusTotal
-        </a>
-        <a href="/abuseipdb" class="nav-item">
-          <span class="nav-icon">🚨</span> AbuseIPDB
-        </a>
-      </nav>
-
-      <div class="sidebar-footer">
-        <div class="promo-card">
-          <div class="promo-title">Realtime Protection</div>
-          <div class="promo-text">Scan emails instantly for phishing signals.</div>
-          <a href="#" class="promo-btn" id="promoScanBtn">Run a scan →</a>
+      <div class="kpi safe">
+        <div class="kpi-head">
+          <span class="kpi-label">Safe</span>
+          <span class="kpi-icon">✓</span>
         </div>
+        <div class="kpi-value" id="statSafe">0</div>
+        <div class="kpi-sub">No suspicious signals</div>
       </div>
-    </aside>
 
-    <!-- ============ Main ============ -->
-    <main class="main">
-      <header class="topbar">
-        <div class="topbar-left">
-          <div class="search-box">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="searchInput" placeholder="Search sender / subject..." />
-          </div>
+      <div class="kpi warn">
+        <div class="kpi-head">
+          <span class="kpi-label">Suspicious</span>
+          <span class="kpi-icon">⚠</span>
         </div>
-        <div class="topbar-right">
-          <button class="icon-btn" id="refreshBtn" title="Refresh">⟳</button>
-          <div class="user-chip">
-            <div class="user-avatar">A</div>
-            <div class="user-meta">
-              <div class="user-name">Admin</div>
-              <div class="user-role">Security Analyst</div>
-            </div>
-          </div>
-        </div>
-      </header>
+        <div class="kpi-value" id="statSuspicious">0</div>
+        <div class="kpi-sub">Needs review</div>
+      </div>
 
-      <section class="page-header">
-        <div>
-          <h1 class="page-title">Dashboard</h1>
-          <p class="page-sub">Monitor every scanned email and its verdict in real time.</p>
+      <div class="kpi danger">
+        <div class="kpi-head">
+          <span class="kpi-label">Phishing</span>
+          <span class="kpi-icon">⛔</span>
         </div>
-        <div class="page-actions">
-          <button class="btn primary" id="newScanBtn">+ New Scan</button>
-          <button class="btn ghost" id="exportBtn">Export</button>
-        </div>
-      </section>
+        <div class="kpi-value" id="statPhishing">0</div>
+        <div class="kpi-sub">Confirmed threats</div>
+      </div>
+    </section>
 
-      <section class="stats">
-        <div class="stat-card">
-          <div class="stat-head">
-            <span class="stat-title">Total Scans</span>
-            <span class="stat-icon">∑</span>
-          </div>
-          <div class="stat-value" id="statTotal">0</div>
-          <div class="stat-sub">All analyzed emails</div>
-        </div>
-
-        <div class="stat-card stat-safe">
-          <div class="stat-head">
-            <span class="stat-title">Safe</span>
-            <span class="stat-icon">✔</span>
-          </div>
-          <div class="stat-value" id="statSafe">0</div>
-          <div class="stat-sub">No suspicious signals</div>
-        </div>
-
-        <div class="stat-card stat-suspicious">
-          <div class="stat-head">
-            <span class="stat-title">Suspicious</span>
-            <span class="stat-icon">⚠</span>
-          </div>
-          <div class="stat-value" id="statSuspicious">0</div>
-          <div class="stat-sub">Needs review</div>
-        </div>
-
-        <div class="stat-card stat-phishing">
-          <div class="stat-head">
-            <span class="stat-title">Phishing</span>
-            <span class="stat-icon">⛔</span>
-          </div>
-          <div class="stat-value" id="statPhishing">0</div>
-          <div class="stat-sub">Confirmed threats</div>
-        </div>
-      </section>
-
-      <section class="grid-2">
-        <div class="panel">
-          <div class="panel-head">
-            <h3>Verdict Distribution</h3>
-            <span class="panel-tag">Live</span>
-          </div>
-          <div class="bars" id="barsChart">
-            <div class="bar-row">
-              <span>Safe</span>
-              <div class="bar-track"><div class="bar-fill safe" id="barSafe"></div></div>
-              <span class="bar-val" id="barSafeVal">0</span>
-            </div>
-            <div class="bar-row">
-              <span>Suspicious</span>
-              <div class="bar-track"><div class="bar-fill suspicious" id="barSuspicious"></div></div>
-              <span class="bar-val" id="barSuspiciousVal">0</span>
-            </div>
-            <div class="bar-row">
-              <span>Phishing</span>
-              <div class="bar-track"><div class="bar-fill phishing" id="barPhishing"></div></div>
-              <span class="bar-val" id="barPhishingVal">0</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h3>Detection Rate</h3>
-            <span class="panel-tag">Realtime</span>
-          </div>
-          <div class="donut-wrap">
-            <svg class="donut" viewBox="0 0 120 120">
-              <circle class="donut-bg" cx="60" cy="60" r="50"></circle>
-              <circle class="donut-fg" id="donutFg" cx="60" cy="60" r="50"></circle>
-            </svg>
-            <div class="donut-center">
-              <div class="donut-value" id="donutValue">0%</div>
-              <div class="donut-label">Threats detected</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
+    <!-- Middle row -->
+    <section class="mid-row">
+      <!-- Verdict Distribution -->
+      <div class="panel">
         <div class="panel-head">
-          <h3>Analysis History</h3>
-          <div class="filters">
-            <select id="verdictFilter">
-              <option value="">All verdicts</option>
-              <option value="Safe">Safe</option>
-              <option value="Suspicious">Suspicious</option>
-              <option value="Phishing">Phishing</option>
-            </select>
+          <h3>Verdict Distribution</h3>
+          <span class="panel-tag live">Live</span>
+        </div>
+        <div class="bars" id="barsChart">
+          <div class="bar-row">
+            <span>Safe</span>
+            <div class="bar-track"><div class="bar-fill safe" id="barSafe" data-w="0"></div></div>
+            <span class="bar-val" id="barSafeVal">0</span>
+          </div>
+          <div class="bar-row">
+            <span>Suspicious</span>
+            <div class="bar-track"><div class="bar-fill suspicious" id="barSuspicious" data-w="0"></div></div>
+            <span class="bar-val" id="barSuspiciousVal">0</span>
+          </div>
+          <div class="bar-row">
+            <span>Phishing</span>
+            <div class="bar-track"><div class="bar-fill phishing" id="barPhishing" data-w="0"></div></div>
+            <span class="bar-val" id="barPhishingVal">0</span>
           </div>
         </div>
+      </div>
 
-        <div class="table-wrap">
-          <table class="history-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Date</th>
-                <th>Sender</th>
-                <th>Subject</th>
-                <th>Score</th>
-                <th>Verdict</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="historyBody">
-              <tr><td colspan="7" class="muted">Loading...</td></tr>
-            </tbody>
-          </table>
+      <!-- Detection Rate -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Detection Rate</h3>
+          <span class="panel-tag">Realtime</span>
         </div>
-      </section>
-    </main>
-  </div>
-
-  <!-- ============ New Scan Modal ============ -->
-  <div class="modal-overlay hidden" id="scanModal">
-    <div class="modal">
-      <div class="modal-head">
-        <h3>Run New Scan</h3>
-        <button class="modal-close" id="closeScanModal">✕</button>
+        <div class="donut-wrap">
+          <svg class="donut" viewBox="0 0 120 120">
+            <defs>
+              <linearGradient id="donutGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#6ea8ff"/>
+                <stop offset="100%" stop-color="#a855f7"/>
+              </linearGradient>
+            </defs>
+            <circle class="donut-bg" cx="60" cy="60" r="50"></circle>
+            <circle class="donut-fg" id="donutFg" cx="60" cy="60" r="50"></circle>
+          </svg>
+          <div class="donut-center">
+            <div class="donut-value" id="donutValue">0%</div>
+            <div class="donut-label">Threats detected</div>
+          </div>
+        </div>
       </div>
+    </section>
 
-      <div class="modal-body">
-        <label class="file-drop" for="modalFileInput">
-          <input type="file" id="modalFileInput" accept=".eml,.msg,.txt" />
-          <span id="modalFileName">📎 Click to choose a file or drag it here</span>
-        </label>
-
-        <div class="divider"><span>OR</span></div>
-
-        <textarea id="modalRawInput" rows="8" placeholder="Paste raw email headers + body here..."></textarea>
-
-        <div class="modal-status hidden" id="modalStatus"></div>
+    <!-- Table -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3>Analysis History</h3>
+        <div class="filters">
+          <select id="verdictFilter">
+            <option value="">All verdicts</option>
+            <option value="Safe">Safe</option>
+            <option value="Suspicious">Suspicious</option>
+            <option value="Phishing">Phishing</option>
+          </select>
+        </div>
       </div>
-
-      <div class="modal-actions">
-        <button class="btn ghost" id="cancelScanBtn">Cancel</button>
-        <button class="btn primary" id="runScanBtn">Analyze Email</button>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Date</th>
+              <th>Sender</th>
+              <th>Subject</th>
+              <th>Score</th>
+              <th>Verdict</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="7" class="muted">Loading...</td></tr>
+          </tbody>
+        </table>
       </div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ New Scan Modal ============ -->
+<div class="modal-overlay hidden" id="scanModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Run New Scan</h3>
+      <button class="modal-close" id="closeScanModal">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <label class="file-drop" for="modalFileInput">
+        <input type="file" id="modalFileInput" accept=".eml,.msg,.txt" />
+        <span id="modalFileName">📎 Click to choose a file or drag it here</span>
+      </label>
+
+      <div class="divider"><span>OR</span></div>
+
+      <textarea id="modalRawInput" rows="8" placeholder="Paste raw email headers + body here..."></textarea>
+
+      <div class="modal-status hidden" id="modalStatus"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cancelScanBtn">Cancel</button>
+      <button class="btn btn-primary" id="runScanBtn">Analyze Email</button>
     </div>
   </div>
+</div>
 
-  <!-- ============ Results Modal ============ -->
-  <div class="modal-overlay hidden" id="resultModal">
-    <div class="modal modal-lg">
-      <div class="modal-head">
-        <h3>Analysis Result</h3>
-        <button class="modal-close" id="closeResultModal">✕</button>
-      </div>
+<!-- ============ Results Modal ============ -->
+<div class="modal-overlay hidden" id="resultModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h3>Analysis Result</h3>
+      <button class="modal-close" id="closeResultModal">✕</button>
+    </div>
 
-      <div class="modal-body" id="resultBody">
-        <!-- Populated by JS -->
-      </div>
+    <div class="modal-body" id="resultBody"></div>
 
-      <div class="modal-actions">
-        <button class="btn ghost" id="resultEnrichBtn">🌐 Enrich with VT + AbuseIPDB</button>
-        <button class="btn ghost" id="resultJsonBtn">Download JSON</button>
-        <button class="btn ghost" id="resultPdfBtn">Download PDF</button>
-        <button class="btn primary" id="resultCloseBtn">Close</button>
-      </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="resultEnrichBtn">🌐 Enrich with VT + AbuseIPDB</button>
+      <button class="btn btn-ghost" id="resultJsonBtn">Download JSON</button>
+      <button class="btn btn-ghost" id="resultPdfBtn">Download PDF</button>
+      <button class="btn btn-primary" id="resultCloseBtn">Close</button>
     </div>
   </div>
+</div>
 
-  <script src="/static/dashboard.js"></script>
+<script src="/static/dashboard.js?v=3"></script>
 </body>
 </html>

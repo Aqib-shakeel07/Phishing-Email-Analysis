@@ -17,7 +17,7 @@ class EmailAnalysis(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     filename = Column(String(255), nullable=True)
 
-    # ---------- From / To ----------
+    # From / To
     sender = Column(String(320), nullable=True)
     sender_name = Column(String(320), nullable=True)
     sender_domain = Column(String(255), nullable=True)
@@ -32,12 +32,12 @@ class EmailAnalysis(Base):
     message_id = Column(String(512), nullable=True)
     received_chain = Column(JSON, nullable=True)
 
-    # ---------- NEW: parsed hops + full headers + auth summary ----------
+    # Hops / headers / auth summary
     hops = Column(JSON, nullable=True)
     full_headers = Column(JSON, nullable=True)
     auth_summary = Column(JSON, nullable=True)
 
-    # ---------- Authentication ----------
+    # Authentication
     spf_present = Column(Boolean, nullable=True)
     spf_pass = Column(Boolean, nullable=True)
     dkim_present = Column(Boolean, nullable=True)
@@ -46,20 +46,23 @@ class EmailAnalysis(Base):
     dmarc_pass = Column(Boolean, nullable=True)
     auth_headers_raw = Column(Text, nullable=True)
 
-    # ---------- Scores ----------
+    # Scores
     header_score = Column(Float, default=0.0)
     url_score = Column(Float, default=0.0)
     content_score = Column(Float, default=0.0)
     attachment_score = Column(Float, default=0.0)
+    encoded_score = Column(Float, default=0.0)
     ml_score = Column(Float, default=0.0)
     final_score = Column(Float, default=0.0)
 
     verdict = Column(String(20), default="Unknown")
 
-    # ---------- Contents ----------
+    # Contents
     urls_found = Column(JSON, nullable=True)
     ips_found = Column(JSON, nullable=True)
     attachments = Column(JSON, nullable=True)
+    encoded_found = Column(JSON, nullable=True)
+    encoded_full_dump = Column(JSON, nullable=True)     # ← NEW
     triggered_features = Column(JSON, nullable=True)
     raw_headers = Column(Text, nullable=True)
 
