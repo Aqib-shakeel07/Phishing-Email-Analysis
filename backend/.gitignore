@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+env/
+.venv/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Env
+.env
+
+# Reports / uploads
+reports/
+uploads/
+
+# Models
+data/model.pkl
+models/*.pkl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store

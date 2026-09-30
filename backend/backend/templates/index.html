@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phishing Email Analyzer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>🛡️ Phishing Email Analyzer</h1>
+    <nav>
+      <a href="/">Analyze</a>
+      <a href="/dashboard">Dashboard</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2>Upload Email</h2>
+      <p class="muted">Upload a .eml file or paste raw email source below.</p>
+
+      <form id="analyzeForm">
+        <label class="file-drop" for="fileInput">
+          <input type="file" id="fileInput" name="file" accept=".eml,.msg,.txt" />
+          <span id="fileName">📎 Click to choose a file or drag it here</span>
+        </label>
+
+        <div class="divider"><span>OR</span></div>
+
+        <textarea id="rawInput" rows="10" placeholder="Paste raw email headers + body here..."></textarea>
+
+        <div class="actions">
+          <button type="submit" id="analyzeBtn">Analyze Email</button>
+          <button type="button" id="clearBtn" class="secondary">Clear</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="loading" class="card hidden">
+      <p>⏳ Analyzing email... please wait.</p>
+    </section>
+
+    <section id="results" class="hidden">
+      <div class="card verdict-card">
+        <div class="verdict-header">
+          <h2>Verdict: <span id="verdictText">-</span></h2>
+          <div class="score-badge" id="scoreBadge">0/100</div>
+        </div>
+        <p id="explanation" class="muted"></p>
+        <div class="score-bars" id="scoreBars"></div>
+      </div>
+
+      <!-- Authentication status -->
+      <div class="card">
+        <h3>Authentication Status</h3>
+        <table class="kv" id="authTable"></table>
+      </div>
+
+      <!-- From / To / Reply-To -->
+      <div class="card">
+        <h3>Message Header</h3>
+        <table class="kv" id="summaryTable"></table>
+      </div>
+
+      <!-- Full raw headers -->
+      <div class="card">
+        <h3>Raw Headers</h3>
+        <details>
+          <summary class="muted" style="cursor:pointer;">Show / hide raw email headers</summary>
+          <pre id="rawHeadersPre" class="raw-pre"></pre>
+        </details>
+      </div>
+
+      <div class="card">
+        <h3>Triggered Features</h3>
+        <ul id="flagsList" class="flags-list"></ul>
+      </div>
+
+      <div class="card">
+        <h3>URLs Found</h3>
+        <div id="urlsContainer"></div>
+      </div>
+
+      <div class="card">
+        <h3>IP Addresses Found</h3>
+        <div id="ipsContainer"></div>
+      </div>
+
+      <div class="card">
+        <h3>Attachments</h3>
+        <div id="attachmentsContainer"></div>
+      </div>
+
+      <div class="card actions">
+        <button id="downloadJsonBtn">⬇ Download JSON Report</button>
+        <button id="downloadPdfBtn" class="secondary">⬇ Download PDF Report</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>© <span id="year"></span> Phishing Email Analyzer</p>
+  </footer>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
