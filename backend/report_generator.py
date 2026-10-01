@@ -233,6 +233,14 @@ class ReportGenerator:
             fontSize=7.5,
             leading=9,
         ))
+        self.styles.add(ParagraphStyle(
+            name="SubTitle",
+            parent=self.styles["Normal"],
+            fontSize=10,
+            leading=13,
+            textColor=colors.HexColor("#546e7a"),
+            alignment=0,
+        ))
 
     def _serializable(self, obj):
         if isinstance(obj, dict):

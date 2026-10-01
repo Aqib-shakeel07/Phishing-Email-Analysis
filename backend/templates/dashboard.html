@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=3" />
+  <link rel="stylesheet" href="/static/dashboard.css?v=5" />
 </head>
 <body>
 
@@ -140,6 +140,42 @@
         </div>
         <div class="kpi-value" id="statPhishing">0</div>
         <div class="kpi-sub">Confirmed threats</div>
+      </div>
+    </section>
+
+    <!-- Latest Scan Summary -->
+    <section class="panel summary-panel" id="latestSummaryPanel">
+      <div class="panel-head">
+        <h3>Latest Scan Summary</h3>
+        <span class="panel-tag live" id="summaryTag">Live</span>
+      </div>
+
+      <div id="summaryBody">
+        <p class="muted">Run a scan to see the summary of your latest analyzed email.</p>
+      </div>
+    </section>
+
+    <!-- Threat Map -->
+    <section class="panel map-panel">
+      <div class="panel-head">
+        <h3>Global Threat Origin</h3>
+        <span class="panel-tag live">Live</span>
+      </div>
+
+      <div class="threat-map-wrap">
+        <div class="threat-map-stats" id="mapStats"></div>
+
+        <div class="threat-map" id="threatMap">
+          <svg id="worldSvg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
+            <g id="continents" fill="rgba(120, 140, 200, 0.14)" stroke="rgba(140, 180, 255, 0.20)" stroke-width="0.6"></g>
+            <g id="attacks"></g>
+          </svg>
+
+          <div class="map-legend">
+            <span><i class="dot-dot danger"></i> Phishing</span>
+            <span><i class="dot-dot warn"></i> Suspicious</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -277,6 +313,6 @@
   </div>
 </div>
 
-<script src="/static/dashboard.js?v=3"></script>
+<script src="/static/dashboard.js?v=5"></script>
 </body>
 </html>

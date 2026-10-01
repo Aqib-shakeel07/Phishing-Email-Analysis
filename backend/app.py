@@ -24,6 +24,7 @@ from encoded_analyzer import EncodedAnalyzer
 from scoring_engine import ScoringEngine
 from virustotal_api import VirusTotalClient
 from abuseipdb_api import AbuseIPDBClient
+from geoip_lookup import lookup_ip as geo_lookup_ip
 from ml_classifier import MLClassifier, generate_synthetic_dataset
 from report_generator import ReportGenerator, build_full_report
 
@@ -73,6 +74,15 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
     encoded_res = encoded_analyzer.analyze(
         raw_bytes, msg=msg, html=html_body, text=text_body
     )
+
+    # --- Merge URLs found inside attachments into URL analysis ---
+    attachment_urls = []
+    for att in attachment_res.get("attachments", []):
+        for u in att.get("embedded_urls", []) or []:
+            attachment_urls.append(u)
+    if attachment_urls:
+        extra_url_res = url_analyzer.analyze_urls(attachment_urls)
+        url_res = _merge_url_results(url_res, extra_url_res)
 
     ml_score = ml_classifier.predict(header_res, url_res, content_res, attachment_res)
 
@@ -139,7 +149,7 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "attachments": attachment_res.get("attachments", []),
         "encoded_found": encoded_res.get("items", []),
         "encoded_summary": encoded_res.get("summary", {}),
-        "encoded_full_dump": encoded_res.get("full_dump", {}),   # ← NEW
+        "encoded_full_dump": encoded_res.get("full_dump", {}),
         "matched_keywords": content_res.get("matched_keywords", {}),
         "raw_headers": _stringify_headers(msg),
     }
@@ -321,6 +331,86 @@ def api_delete(analysis_id):
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
     return jsonify(get_stats())
+
+
+@app.route("/api/threat-map", methods=["GET"])
+def api_threat_map():
+    """One marker per analyzed email — origin IP only, deduplicated by analysis ID."""
+    rows = get_all_analyses(limit=500)
+    points = []
+    country_counts = {}
+    seen_emails = set()
+
+    for row in rows:
+        a = _row_to_dict(row)
+        verdict = a.get("verdict")
+        if verdict not in ("Suspicious", "Phishing"):
+            continue
+
+        aid = a.get("id")
+        if aid in seen_emails:
+            continue
+        seen_emails.add(aid)
+
+        # Pick the TRUE origin: last public IPv4 in hops (hops are newest→oldest)
+        origin_ip = None
+        for h in reversed(a.get("hops", []) or []):
+            ip = h.get("from_ip")
+            if not ip:
+                continue
+            if ip.startswith(("10.", "192.168.", "127.", "172.", "169.254.")):
+                continue
+            if ":" in ip:
+                continue  # skip IPv6
+            origin_ip = ip
+            break
+
+        # Fallback: first public IP from ips_found
+        if not origin_ip:
+            for entry in a.get("ips_found", []) or []:
+                ip = entry.get("ip")
+                if not ip or ":" in ip:
+                    continue
+                if entry.get("public"):
+                    origin_ip = ip
+                    break
+
+        if not origin_ip:
+            continue
+
+        geo = geo_lookup_ip(origin_ip)
+        if geo.get("skip") or geo.get("error"):
+            continue
+        if geo.get("lat") is None or geo.get("lon") is None:
+            continue
+
+        cc = geo.get("country_code") or "??"
+        country_counts[cc] = country_counts.get(cc, 0) + 1
+
+        points.append({
+            "ip": origin_ip,
+            "lat": geo["lat"],
+            "lon": geo["lon"],
+            "country": geo.get("country"),
+            "country_code": cc,
+            "city": geo.get("city"),
+            "isp": geo.get("isp"),
+            "verdict": verdict,
+            "sender": a.get("sender"),
+            "subject": a.get("subject"),
+            "analysis_id": aid,
+        })
+
+    top_countries = sorted(
+        [{"cc": k, "count": v} for k, v in country_counts.items()],
+        key=lambda x: -x["count"],
+    )[:8]
+
+    return jsonify({
+        "points": points,
+        "country_counts": top_countries,
+        "total": len(points),
+    })
 
 
 @app.route("/api/analyses/<int:analysis_id>/report", methods=["GET"])
@@ -518,7 +608,7 @@ def _row_to_dict(row) -> dict:
         "ips_found": getattr(row, "ips_found", None) or [],
         "attachments": row.attachments or [],
         "encoded_found": getattr(row, "encoded_found", None) or [],
-        "encoded_full_dump": getattr(row, "encoded_full_dump", None) or {},   # ← NEW
+        "encoded_full_dump": getattr(row, "encoded_full_dump", None) or {},
         "triggered_features": row.triggered_features or [],
         "raw_headers": row.raw_headers,
         "created_at": row.created_at.isoformat() if row.created_at else None,

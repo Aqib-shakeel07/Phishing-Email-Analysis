@@ -2,6 +2,7 @@ import os
 import re
 import email
 import zipfile
+import hashlib
 from helpers import sha256_file, clamp
 from validators import has_double_extension
 from logger import logger
@@ -12,19 +13,19 @@ DANGEROUS_EXTS = {
     "js", "jse", "vbs", "vbe", "wsf", "wsh", "ps1",
     "msi", "jar", "reg", "lnk", "cpl", "dll", "sys",
     "iso", "img", "vhd", "apk", "app", "dmg",
+    "svg", "svgz",               # SVG can execute JS via onload
 }
 
 MACRO_EXTS = {"docm", "xlsm", "pptm", "dotm", "xltm", "potm"}
 
 ARCHIVE_EXTS = {"zip", "rar", "7z", "tar", "gz", "bz2", "xz"}
 
+IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff"}
+
 
 class AttachmentAnalyzer:
     def __init__(self, virustotal_client=None):
-        # virustotal_client: optional object with .lookup_hash(sha)
         self.vt = virustotal_client
-
-    # ---------------- Public ----------------
 
     def analyze(self, msg: email.message.Message) -> dict:
         result = {
@@ -44,13 +45,10 @@ class AttachmentAnalyzer:
             result["flags"].extend(info["flags"])
             score += info["score"]
 
-        # Cap total
         result["score"] = clamp(score / max(len(attachments), 1) + score * 0.1)
         result["flags"] = sorted(set(result["flags"]))
         logger.info(f"Attachment analysis score: {result['score']}")
         return result
-
-    # ---------------- Internal ----------------
 
     def _extract_attachments(self, msg: email.message.Message) -> list:
         out = []
@@ -83,16 +81,15 @@ class AttachmentAnalyzer:
             "flags": [],
             "score": 0.0,
             "virustotal": None,
+            "embedded_urls": [],
         }
         score = 0.0
         filename = att["filename"]
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         info["extension"] = ext
 
-        # Hash
         if att["bytes"]:
             try:
-                import hashlib
                 info["sha256"] = hashlib.sha256(att["bytes"]).hexdigest()
             except Exception:
                 pass
@@ -131,9 +128,68 @@ class AttachmentAnalyzer:
                 f"Extension/content-type mismatch: .{ext} vs {att['content_type']}"
             )
 
+        # ============================================================
+        # SVG payload detection (XSS / redirect / embedded URLs)
+        # ============================================================
+        if ext in ("svg", "svgz"):
+            try:
+                text = att["bytes"].decode("utf-8", errors="replace")
+            except Exception:
+                text = ""
+
+            if re.search(r"\bonload\s*=", text, re.I):
+                score += 45
+                info["flags"].append(
+                    "SVG contains 'onload' event handler — XSS/redirect payload"
+                )
+
+            if re.search(r"window\.location|location\.href|location\.replace|<script", text, re.I):
+                score += 35
+                info["flags"].append("SVG executes JavaScript redirect")
+
+            # <foreignObject> is often used for HTML injection
+            if re.search(r"<foreignObject", text, re.I):
+                score += 20
+                info["flags"].append("SVG uses <foreignObject> (HTML injection vector)")
+
+            # Extract any URLs from the SVG
+            urls_in_svg = re.findall(r"https?://[^\s'\"<>)\]]+", text)
+            if urls_in_svg:
+                score += 20
+                info["flags"].append(
+                    f"SVG embeds URL(s): {', '.join(urls_in_svg[:3])}"
+                )
+                info["embedded_urls"] = urls_in_svg
+
+            # base64 pre-filled credential payload after $ or ?u=
+            if re.search(r"[\$?](?:u=)?[A-Za-z0-9+/=]{20,}", text):
+                score += 20
+                info["flags"].append(
+                    "SVG contains base64 payload (pre-filled credential pattern)"
+                )
+
+        # ============================================================
+        # Large image attachment (QR / OCR phishing)
+        # ============================================================
+        if ext in IMAGE_EXTS and att["size"] > 500_000:
+            score += 15
+            info["flags"].append(
+                f"Large image attachment ({att['size']:,} bytes) — "
+                f"possible QR-code / image-embedded phishing"
+            )
+
+        if ext in IMAGE_EXTS and att["size"] > 1_000_000:
+            score += 10
+            info["flags"].append(
+                f"Very large image ({att['size']:,} bytes) — "
+                f"unusual for a legitimate transactional email"
+            )
+
         # Suspicious filename keywords
-        if re.search(r"(invoice|payment|receipt|statement|order|shipping|resume|cv|scan)",
-                     filename, re.I):
+        if re.search(
+            r"(invoice|payment|receipt|statement|order|shipping|resume|cv|scan|purchase|confirm|pymt|pay)",
+            filename, re.I
+        ):
             score += 5
             info["flags"].append(f"Social-engineering filename: {filename}")
 
@@ -190,12 +246,12 @@ class AttachmentAnalyzer:
             "jpg": "image/jpeg",
             "jpeg": "image/jpeg",
             "png": "image/png",
+            "svg": "image/svg+xml",
             "txt": "text/plain",
         }
         expected = mapping.get(ext)
         if expected and expected not in ctype and "octet-stream" not in ctype:
             return True
-        # Dangerous ext with media/text content type
         if ext in DANGEROUS_EXTS and ("text" in ctype or "image" in ctype):
             return True
         return False

@@ -111,7 +111,6 @@ function bindEvents() {
     });
   }
 
-  // Ripple on buttons
   document.querySelectorAll(".btn").forEach(attachRipple);
 }
 
@@ -808,6 +807,9 @@ function renderAttachmentsCard(a) {
       <div class="url">${escapeHtml(at.filename || "")}</div>
       <div class="meta">${escapeHtml(at.content_type || "")} · ${at.size} bytes · Score: ${at.score}</div>
       ${(at.flags && at.flags.length) ? `<div class="meta">⚠ ${at.flags.map(escapeHtml).join(" · ")}</div>` : ""}
+      ${(at.embedded_urls && at.embedded_urls.length)
+        ? `<div class="meta">🔗 Embedded URL: <span class="mono">${at.embedded_urls.map(escapeHtml).join(" · ")}</span></div>`
+        : ""}
       ${at.sha256 ? `<div class="ti-links"><a class="ti-link" target="_blank" href="https://www.virustotal.com/gui/file/${encodeURIComponent(at.sha256)}">🦠 VirusTotal (hash)</a></div>` : ""}
     </div>
   `).join("");
@@ -825,6 +827,160 @@ function renderRawHeaders(a) {
       <pre class="raw-pre">${escapeHtml(a.raw_headers)}</pre>
     </details>
   </div>`;
+}
+
+/* ==================================================
+   Latest Scan Summary
+   ================================================== */
+
+function renderLatestSummary(latest) {
+  const panel = $("summaryBody");
+  const tag = $("summaryTag");
+  if (!panel) return;
+
+  if (!latest) {
+    panel.innerHTML = `<p class="muted">Run a scan to see the summary of your latest analyzed email.</p>`;
+    if (tag) tag.textContent = "Idle";
+    return;
+  }
+
+  if (tag) tag.textContent = "Latest";
+
+  const cls = (latest.verdict || "Unknown").toLowerCase();
+  const score = latest.final_score ?? 0;
+  const scoreLabel = cls === "safe" ? "Low risk" : cls === "suspicious" ? "Needs review" : "High risk";
+
+  // Gather top indicators from triggered features + attachment flags
+  const flags = latest.triggered_features || [];
+  const topFlags = flags.slice(0, 6);
+
+  // Build "what to verify" checklist based on the signals we found
+  const checklist = buildChecklist(latest);
+
+  const flagsHtml = topFlags.length
+    ? `<ul class="summary-flags">
+        ${topFlags.map((f) => {
+          const sev = (f.module === "header" || f.module === "attachment" || f.module === "url") ? "" : "info";
+          return `<li class="${sev}">
+            <span class="flag-module">${escapeHtml(f.module || "")}</span>
+            <span class="flag-text">${escapeHtml(f.detail || "")}</span>
+          </li>`;
+        }).join("")}
+      </ul>`
+    : `<p class="muted">No suspicious signals triggered.</p>`;
+
+  const checkHtml = checklist.length
+    ? `<ul class="summary-checklist">
+        ${checklist.map((c) => `<li class="${c.done ? "done" : ""}">${escapeHtml(c.text)}</li>`).join("")}
+      </ul>`
+    : `<p class="muted">No manual checks required.</p>`;
+
+  panel.innerHTML = `
+    <div class="summary-header">
+      <div class="summary-left">
+        <span class="summary-verdict-badge ${cls}">${escapeHtml(latest.verdict || "Unknown")}</span>
+        <div class="summary-info">
+          <div class="summary-subject">${escapeHtml(latest.subject || "(no subject)")}</div>
+          <div class="summary-sender">${escapeHtml(latest.sender || "unknown sender")}</div>
+        </div>
+      </div>
+      <div class="summary-score-box">
+        <div class="summary-score-value ${cls}">${score}</div>
+        <div class="summary-score-label">${scoreLabel}</div>
+      </div>
+    </div>
+
+    <div class="summary-grid">
+      <div class="summary-col">
+        <h4><span class="ico">⚠</span> Top Indicators to Double-Check</h4>
+        ${flagsHtml}
+      </div>
+      <div class="summary-col">
+        <h4><span class="ico">☑</span> What You Should Verify</h4>
+        ${checkHtml}
+      </div>
+    </div>
+
+    <div class="summary-actions">
+      <button class="btn btn-primary" id="summaryViewBtn">View Full Analysis</button>
+      <button class="btn btn-ghost" id="summaryJsonBtn">Download JSON</button>
+      <button class="btn btn-ghost" id="summaryPdfBtn">Download PDF</button>
+    </div>
+  `;
+
+  const viewBtn = $("summaryViewBtn");
+  const jsonBtn = $("summaryJsonBtn");
+  const pdfBtn = $("summaryPdfBtn");
+  if (viewBtn) viewBtn.onclick = () => openResultById(latest.id);
+  if (jsonBtn) jsonBtn.onclick = () => window.open(`/api/analyses/${latest.id}/report?format=json`, "_blank");
+  if (pdfBtn) pdfBtn.onclick = () => window.open(`/api/analyses/${latest.id}/report?format=pdf`, "_blank");
+}
+
+function buildChecklist(a) {
+  const out = [];
+  const flags = a.triggered_features || [];
+  const flagText = flags.map((f) => (f.detail || "").toLowerCase()).join(" | ");
+
+  // SPF / DKIM / DMARC
+  if (flagText.includes("spf") || !a.spf_present) {
+    out.push({ text: "Verify SPF alignment on the sender domain", done: a.spf_pass === true });
+  }
+  if (flagText.includes("dkim") || !a.dkim_present) {
+    out.push({ text: "Check DKIM signature on the raw headers", done: a.dkim_pass === true });
+  }
+  if (flagText.includes("dmarc") || !a.dmarc_present) {
+    out.push({ text: "Confirm DMARC policy exists for sender domain", done: a.dmarc_pass === true });
+  }
+
+  // Reply-To / Return-Path
+  if (a.reply_to_domain && a.sender_domain && a.reply_to_domain !== a.sender_domain) {
+    out.push({ text: `Confirm Reply-To domain '${a.reply_to_domain}' is legitimate`, done: false });
+  }
+  if (a.return_path_domain && a.sender_domain && a.return_path_domain !== a.sender_domain) {
+    out.push({ text: `Check Return-Path mismatch with From domain`, done: false });
+  }
+
+  // Display name spoofing
+  if (flagText.includes("impersonates") || flagText.includes("claims")) {
+    out.push({ text: "Verify the display name matches the actual sender", done: false });
+  }
+
+  // URLs
+  const urls = a.urls_found || [];
+  const riskyUrls = urls.filter((u) => (u.score || 0) >= 30);
+  if (riskyUrls.length) {
+    out.push({ text: `Open ${riskyUrls.length} high-risk URL(s) only in a sandbox`, done: false });
+  }
+
+  // Attachments
+  const atts = a.attachments || [];
+  const riskyAtts = atts.filter((at) => (at.score || 0) >= 20);
+  if (riskyAtts.length) {
+    out.push({ text: `Do NOT open attachment(s): ${riskyAtts.map((x) => x.filename).join(", ")}`, done: false });
+  }
+  const svgAtts = atts.filter((at) => (at.extension || "").toLowerCase() === "svg");
+  if (svgAtts.length) {
+    out.push({ text: "SVG attachment found — inspect for embedded redirect", done: false });
+  }
+  const embeddedUrls = atts.flatMap((at) => at.embedded_urls || []);
+  if (embeddedUrls.length) {
+    out.push({ text: "Check URLs embedded inside attachments", done: false });
+  }
+
+  // Content warnings
+  if (flagText.includes("credential") || flagText.includes("otp")) {
+    out.push({ text: "Never enter credentials from email links", done: false });
+  }
+  if (flagText.includes("hidden") || flagText.includes("invisible")) {
+    out.push({ text: "Inspect hidden HTML content in the raw body", done: false });
+  }
+
+  // Verification contact
+  if (a.sender_domain) {
+    out.push({ text: `Contact sender via a known phone number, not reply`, done: false });
+  }
+
+  return out.slice(0, 8);
 }
 
 /* ---------------- Helpers ---------------- */
@@ -882,10 +1038,144 @@ function attachRipple(el) {
   });
 }
 
+/* ---------------- Threat Map ---------------- */
+
+const CONTINENTS = [
+  "M 130 120 L 200 105 L 245 130 L 260 180 L 235 225 L 200 240 L 165 220 L 140 180 Z",
+  "M 230 260 L 270 265 L 285 310 L 275 360 L 250 400 L 235 380 L 220 320 L 218 285 Z",
+  "M 470 100 L 540 95 L 565 125 L 555 155 L 520 165 L 485 155 L 465 130 Z",
+  "M 470 190 L 540 185 L 570 220 L 560 275 L 530 335 L 500 350 L 480 320 L 465 265 L 465 220 Z",
+  "M 570 100 L 700 90 L 800 105 L 850 140 L 830 180 L 780 200 L 720 210 L 660 200 L 610 180 L 590 155 L 575 130 Z",
+  "M 790 330 L 850 320 L 880 350 L 860 390 L 810 395 L 785 370 Z",
+  "M 340 60 L 400 55 L 420 90 L 390 120 L 345 115 L 330 85 Z",
+];
+
+function projectToMap(lat, lon) {
+  const x = (lon + 180) * (1000 / 360);
+  const y = (90 - lat) * (500 / 180);
+  return { x, y };
+}
+
+function renderContinents() {
+  const g = document.getElementById("continents");
+  if (!g) return;
+  g.innerHTML = CONTINENTS.map((d) => `<path d="${d}" />`).join("");
+}
+
+async function loadThreatMap() {
+  const attacksG = document.getElementById("attacks");
+  if (!attacksG) return;
+  renderContinents();
+
+  try {
+    const res = await fetch(`${API}/api/threat-map`);
+    const data = await res.json();
+    renderThreatMap(data);
+  } catch (err) {
+    console.error("threat-map failed", err);
+  }
+}
+
+function renderThreatMap(data) {
+  const g = document.getElementById("attacks");
+  const statsEl = document.getElementById("mapStats");
+  if (!g) return;
+
+  g.innerHTML = "";
+
+  const points = data.points || [];
+  if (!points.length) {
+    if (statsEl) statsEl.innerHTML = `<span class="muted">No public sender IPs found yet — run a scan to populate the map.</span>`;
+    return;
+  }
+
+  if (statsEl) {
+    const statsHtml = `
+      <div class="stat-item">Origin emails: <strong>${points.length}</strong></div>
+      ${(data.country_counts || []).slice(0, 5).map((c) => `
+        <div class="stat-item">
+          <img class="flag" src="https://flagcdn.com/w40/${c.cc.toLowerCase()}.png" alt="" onerror="this.style.display='none'">
+          ${c.cc} <strong>${c.count}</strong>
+        </div>
+      `).join("")}
+    `;
+    statsEl.innerHTML = statsHtml;
+  }
+
+  points.forEach((p) => {
+    const { x, y } = projectToMap(p.lat, p.lon);
+    const color = p.verdict === "Phishing" ? "#ff5470" : "#ffb545";
+
+    const pulse = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    pulse.setAttribute("cx", x);
+    pulse.setAttribute("cy", y);
+    pulse.setAttribute("r", 3);
+    pulse.setAttribute("fill", color);
+    pulse.setAttribute("class", "attack-pulse");
+    g.appendChild(pulse);
+
+    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    dot.setAttribute("cx", x);
+    dot.setAttribute("cy", y);
+    dot.setAttribute("r", 4);
+    dot.setAttribute("fill", color);
+    dot.setAttribute("stroke", "#ffffff");
+    dot.setAttribute("stroke-width", "1");
+    dot.setAttribute("class", "attack-marker");
+    dot.setAttribute("data-ip", p.ip || "");
+    dot.setAttribute("data-country", p.country || "");
+    dot.setAttribute("data-city", p.city || "");
+    dot.setAttribute("data-isp", p.isp || "");
+    dot.setAttribute("data-verdict", p.verdict || "");
+    dot.setAttribute("data-sender", p.sender || "");
+    dot.setAttribute("data-subject", p.subject || "");
+    dot.style.filter = `drop-shadow(0 0 6px ${color})`;
+    dot.addEventListener("mouseenter", showMapTooltip);
+    dot.addEventListener("mousemove", moveMapTooltip);
+    dot.addEventListener("mouseleave", hideMapTooltip);
+    g.appendChild(dot);
+  });
+}
+
+let mapTooltipEl = null;
+function ensureMapTooltip() {
+  if (!mapTooltipEl) {
+    mapTooltipEl = document.createElement("div");
+    mapTooltipEl.className = "map-tooltip";
+    document.body.appendChild(mapTooltipEl);
+  }
+  return mapTooltipEl;
+}
+
+function showMapTooltip(e) {
+  const t = e.currentTarget;
+  const el = ensureMapTooltip();
+  el.innerHTML = `
+    <strong>${escapeHtml(t.dataset.ip || "")}</strong>
+    <div class="row">Country: <span>${escapeHtml(t.dataset.country || "—")}</span></div>
+    <div class="row">City: <span>${escapeHtml(t.dataset.city || "—")}</span></div>
+    <div class="row">ISP: <span>${escapeHtml(t.dataset.isp || "—")}</span></div>
+    <div class="row">Verdict: <span>${escapeHtml(t.dataset.verdict || "—")}</span></div>
+    <div class="row">Sender: <span>${escapeHtml(t.dataset.sender || "—")}</span></div>
+    <div class="row">Subject: <span>${escapeHtml(t.dataset.subject || "—")}</span></div>
+  `;
+  el.style.display = "block";
+}
+
+function moveMapTooltip(e) {
+  const el = ensureMapTooltip();
+  el.style.left = (e.clientX + 14) + "px";
+  el.style.top = (e.clientY + 14) + "px";
+}
+
+function hideMapTooltip() {
+  if (mapTooltipEl) mapTooltipEl.style.display = "none";
+}
+
 /* ---------------- Data loads ---------------- */
 
 async function loadAll() {
-  await Promise.all([loadStats(), loadHistory()]);
+  await Promise.all([loadStats(), loadHistory(), loadThreatMap()]);
 }
 
 async function loadStats() {
@@ -966,8 +1256,21 @@ async function loadHistory() {
     const data = await res.json();
     allItems = data.items || [];
     applyFilters();
+
+    // Render latest summary from the most recent item
+    if (allItems.length) {
+      const latest = allItems.reduce((a, b) => {
+        const ta = new Date(a.created_at || 0).getTime();
+        const tb = new Date(b.created_at || 0).getTime();
+        return ta > tb ? a : b;
+      });
+      renderLatestSummary(latest);
+    } else {
+      renderLatestSummary(null);
+    }
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="7" class="muted">Failed to load.</td></tr>`;
+    renderLatestSummary(null);
   }
 }
 

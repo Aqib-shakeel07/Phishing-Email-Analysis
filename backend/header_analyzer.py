@@ -1,8 +1,10 @@
 import re
+import math
 import email
 from email import policy
 from email.utils import parseaddr, getaddresses, parsedate_to_datetime
 from datetime import timezone
+from collections import Counter
 from helpers import (
     extract_domain, similarity, normalize_homoglyphs,
     load_brands, clamp
@@ -16,7 +18,6 @@ AUTH_REGEX = {
     "dmarc": re.compile(r"dmarc=(\w+)", re.IGNORECASE),
 }
 
-# "from host (ip) by host with proto id x; date"
 RECEIVED_FROM_BY_RE = re.compile(
     r"from\s+(?P<from_host>[^\s(]+)(?:\s*\((?P<from_ip>[^)]+)\))?"
     r"(?:\s+by\s+(?P<by_host>[^\s(]+)(?:\s*\((?P<by_ip>[^)]+)\))?)?",
@@ -27,6 +28,13 @@ RECEIVED_WITH_RE = re.compile(
     re.IGNORECASE,
 )
 
+FREE_EMAIL_DOMAINS = {
+    "gmail.com", "yahoo.com", "outlook.com", "hotmail.com",
+    "live.com", "aol.com", "protonmail.com", "proton.me",
+    "mail.com", "gmx.com", "yandex.com", "zoho.com", "icloud.com",
+    "msn.com", "me.com",
+}
+
 
 def _split_addresses(header_value):
     if not header_value:
@@ -34,8 +42,37 @@ def _split_addresses(header_value):
     return [(n.strip(), e.strip()) for n, e in getaddresses([header_value]) if e]
 
 
+def _shannon_entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    freq = Counter(s)
+    length = len(s)
+    return -sum((n / length) * math.log2(n / length) for n in freq.values())
+
+
+def _is_random_local_part(local: str) -> bool:
+    """Detect gibberish local parts like mligbkficadjirujblurcj837."""
+    if not local or len(local) < 14:
+        return False
+    # If it contains normal word separators, it's likely not random
+    if re.search(r"[._-]", local):
+        return False
+    entropy = _shannon_entropy(local)
+    # High entropy + long + no vowels pattern = random
+    vowels = sum(1 for c in local if c.lower() in "aeiou")
+    vowel_ratio = vowels / len(local)
+    return entropy > 3.2 and vowel_ratio < 0.35
+
+
+def _is_person_name(name: str) -> bool:
+    """Detect 'First Last' style person names."""
+    if not name:
+        return False
+    name = name.strip()
+    return bool(re.fullmatch(r"[A-Z][a-zA-Z'\-]+ [A-Z][a-zA-Z'\-]+", name))
+
+
 def _parse_received(hdr: str, index: int, prev_dt=None):
-    """Turn a Received: header into a hop dict."""
     hdr_clean = re.sub(r"\s+", " ", hdr).strip()
 
     hop = {
@@ -61,7 +98,6 @@ def _parse_received(hdr: str, index: int, prev_dt=None):
     if w:
         hop["with"] = w.group("with").strip()
 
-    # Extract trailing date
     date_part = hdr_clean.rsplit(";", 1)[-1].strip() if ";" in hdr_clean else None
     if date_part:
         try:
@@ -85,7 +121,6 @@ class HeaderAnalyzer:
 
     def analyze(self, msg: email.message.Message) -> dict:
         result = {
-            # basic
             "sender": None,
             "sender_name": None,
             "sender_domain": None,
@@ -99,27 +134,16 @@ class HeaderAnalyzer:
             "date": None,
             "message_id": None,
 
-            # auth
-            "spf_present": False,
-            "spf_pass": None,
-            "spf_raw": None,
-            "dkim_present": False,
-            "dkim_pass": None,
-            "dkim_raw": None,
-            "dmarc_present": False,
-            "dmarc_pass": None,
-            "dmarc_raw": None,
+            "spf_present": False, "spf_pass": None, "spf_raw": None,
+            "dkim_present": False, "dkim_pass": None, "dkim_raw": None,
+            "dmarc_present": False, "dmarc_pass": None, "dmarc_raw": None,
             "auth_headers_raw": None,
 
-            # new — for MXToolbox-like view
             "auth_summary": {},
             "hops": [],
             "full_headers": [],
-
-            # chain
             "received_chain": [],
 
-            # flags
             "flags": [],
             "score": 0.0,
         }
@@ -151,28 +175,24 @@ class HeaderAnalyzer:
             result["return_path"] = rp_email
             result["return_path_domain"] = extract_domain(rp_email)
 
-        # ----- Subject / Date / Message-ID -----
         result["subject"] = msg.get("Subject", "")
         result["date"] = msg.get("Date", "")
         result["message_id"] = msg.get("Message-ID", "")
 
-        # ----- Full headers list -----
         full = []
         for k, v in msg.items():
             full.append({"name": k, "value": str(v)})
         result["full_headers"] = full
 
-        # ----- Received chain + hops -----
+        # ----- Hops -----
         received = msg.get_all("Received", []) or []
         result["received_chain"] = [r.strip() for r in received]
 
-        # Build hops in chronological order (oldest first)
         hops = []
         prev_dt = None
         for i, rcv in enumerate(reversed(received), start=1):
             hop = _parse_received(rcv, i, prev_dt)
             hops.append(hop)
-            # carry forward parsed dt for delay calc on next hop
             if hop.get("time"):
                 try:
                     dt = parsedate_to_datetime(hop["time"].replace(" UTC", " +0000"))
@@ -181,7 +201,7 @@ class HeaderAnalyzer:
                     pass
         result["hops"] = hops
 
-        # ----- Authentication headers -----
+        # ----- Authentication -----
         auth_parts = []
         auth_parts += msg.get_all("Authentication-Results", []) or []
         auth_parts += msg.get_all("ARC-Authentication-Results", []) or []
@@ -234,16 +254,13 @@ class HeaderAnalyzer:
                 result["flags"].append("DMARC result missing from Authentication-Results")
                 score += 5
         else:
-            result["flags"].append(
-                "No Authentication-Results / SPF / DKIM headers present"
-            )
+            result["flags"].append("No Authentication-Results / SPF / DKIM headers present")
             score += 10
 
-        # ----- Auth summary (for MXToolbox-like table) -----
         result["auth_summary"] = {
             "spf_published": spf_pub,
             "spf_authenticated": result["spf_pass"],
-            "spf_aligned": self._check_alignment(result.get("spf_raw")),
+            "spf_aligned": result.get("spf_raw") == "pass",
             "dkim_published": dkim_pub,
             "dkim_authenticated": result["dkim_pass"],
             "dkim_aligned": result["dkim_pass"] is True,
@@ -251,7 +268,52 @@ class HeaderAnalyzer:
             "dmarc_compliant": (result["spf_pass"] is True and result["dkim_pass"] is True),
         }
 
-        # ----- Display name spoofing -----
+        # ============================================================
+        # NEW RULES
+        # ============================================================
+
+        # --- NEW RULE 1: Random-string sender local part ---
+        local_part = sender_email.split("@")[0] if sender_email else ""
+        if _is_random_local_part(local_part):
+            score += 25
+            result["flags"].append(
+                f"Random-string sender local part: '{local_part}' "
+                f"(typical of bot/compromised accounts)"
+            )
+
+        # --- NEW RULE 2: Person name from free email domain ---
+        if _is_person_name(sender_name) and result["sender_domain"] in FREE_EMAIL_DOMAINS:
+            score += 20
+            result["flags"].append(
+                f"Person name '{sender_name}' sent from free email "
+                f"domain '{result['sender_domain']}' — common impersonation pattern"
+            )
+
+        # --- NEW RULE 3: Free email sender → corporate recipient ---
+        if result["sender_domain"] in FREE_EMAIL_DOMAINS and result["to"]:
+            external_recipients = []
+            for _n, e in result["to"]:
+                d = extract_domain(e)
+                if d and d not in FREE_EMAIL_DOMAINS and d != result["sender_domain"]:
+                    external_recipients.append(d)
+            if external_recipients:
+                score += 10
+                result["flags"].append(
+                    f"Free email domain sender '{result['sender_domain']}' "
+                    f"sending to corporate domain(s): {', '.join(external_recipients[:3])}"
+                )
+
+        # --- NEW RULE 4: Received chain contains HTTPREST from Gmail API ---
+        received_raw = " ".join(result["received_chain"]).lower()
+        if "httpREST".lower() in received_raw and "gmailapi.google.com" in received_raw:
+            score += 15
+            result["flags"].append(
+                "Email sent via Gmail API (HTTPREST) — common in automated/bot phishing"
+            )
+
+        # ============================================================
+
+        # ----- Display name spoofing (existing) -----
         if sender_name and sender_email:
             name_brand = self._match_brand_in_text(sender_name)
             if name_brand:
@@ -314,10 +376,6 @@ class HeaderAnalyzer:
         return result
 
     # ------------- helpers -------------
-
-    def _check_alignment(self, spf_result):
-        """Rough alignment: if SPF result contains 'pass' we mark aligned."""
-        return spf_result == "pass"
 
     def _match_brand_in_text(self, text: str) -> str | None:
         if not text:

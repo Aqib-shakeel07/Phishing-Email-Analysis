@@ -20,6 +20,9 @@ IP_REGEX = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
 )
 
+# $<base64> — pre-filled credential phishing pattern
+B64_PAYLOAD_RE = re.compile(r"[\$?](?:u=)?[A-Za-z0-9+/=]{20,}")
+
 
 def clean_url(url: str) -> str:
     if not url:
@@ -206,6 +209,13 @@ class URLAnalyzer:
             score += 15
             info["flags"].append(f"Obfuscated/long random path: {info['domain']}")
 
+        # --- NEW: $base64 payload (pre-filled credential phishing) ---
+        if B64_PAYLOAD_RE.search(url):
+            score += 20
+            info["flags"].append(
+                f"URL contains $base64 payload (pre-filled credential phish): {info['domain']}"
+            )
+
         host = info["host"]
 
         if any(host.endswith(s) for s in self.shortners):
@@ -232,7 +242,7 @@ class URLAnalyzer:
                 f"Domain looks like brand '{lookalike}': {info['domain']}"
             )
 
-        # Brand name used as subdomain of a non-brand domain (apple.evil.com)
+        # Brand used as subdomain of non-brand domain (apple.evil.com)
         brand_sub = self._detect_brand_as_subdomain(host)
         if brand_sub:
             score += 35
@@ -310,13 +320,11 @@ class URLAnalyzer:
             for bd in brand["domains"]:
                 brand_base = bd.split(".")[0]
                 if base == brand_base:
-                    return None  # exact match — legit domain
+                    return None
 
-                # Substring match: zelle-activity, paypal-secure, apple-id, etc.
                 if brand_base in norm_base or norm_base.startswith(brand_base):
                     return brand["name"]
 
-                # Edit-distance (typosquat): paypa1, gooogle, arnazon
                 sim = similarity(norm_base, brand_base)
                 if sim >= 0.80 and abs(len(base) - len(brand_base)) <= 2:
                     return brand["name"]

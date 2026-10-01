@@ -1,0 +1,39 @@
+{
+  "high_risk": [
+    "tk", "ml", "ga", "cf", "gq",
+    "top", "xyz", "work", "click", "link",
+    "country", "stream", "download", "loan",
+    "bid", "trade", "webcam", "science",
+    "party", "review", "date", "racing",
+    "win", "men", "accountant", "cricket",
+    "cfd", "sbs", "cyou", "shop", "monster",
+    "quest", "bar", "rest", "bond", "beauty",
+    "hair", "skin", "makeup", "lol", "autos",
+    "boats", "homes", "motorcycles", "yachts",
+    "cpa", "casino", "poker", "bet", "kim",
+    "mom", "dad", "lifestyle", "surf", "today",
+    "live", "icu", "vip", "club", "fun",
+    "pro", "cc", "ws", "buzz", "space"
+  ],
+  "medium_risk": [
+    "info", "biz", "online", "site", "website",
+    "store", "shop", "icu", "monster", "wang",
+    "ren", "xin", "top", "uno", "zip",
+    "mov", "cam", "wiki", "email", "art"
+  ],
+  "url_shorteners": [
+    "bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly",
+    "is.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
+    "tiny.cc", "lnkd.in", "rb.gy", "shorte.st", "adf.ly",
+    "bit.do", "mcaf.ee", "soo.gd", "s2r.co", "clck.ru",
+    "qr.ae", "po.st", "snip.ly", "bl.ink", "t.ly"
+  ],
+  "free_hosting": [
+    "000webhostapp.com", "weebly.com", "wixsite.com",
+    "blogspot.com", "wordpress.com", "github.io",
+    "netlify.app", "vercel.app", "glitch.me", "repl.co",
+    "pages.dev", "web.app", "firebaseapp.com",
+    "herokuapp.com", "surge.sh", "render.com",
+    "r2.dev", "workers.dev", "gitlab.io"
+  ]
+}
