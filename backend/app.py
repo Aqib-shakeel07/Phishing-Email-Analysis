@@ -14,7 +14,10 @@ from database import (
     get_all_analyses, get_stats, delete_analysis,
     load_brand_domains
 )
-from helpers import load_brands, score_to_verdict, clamp
+from helpers import (
+    load_brands, score_to_verdict, clamp,
+    extract_ips_from_text,
+)
 
 from header_analyzer import HeaderAnalyzer, parse_email_bytes
 from url_analyzer import URLAnalyzer
@@ -31,6 +34,8 @@ from report_generator import ReportGenerator, build_full_report
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 CORS(app)
 
 
@@ -83,6 +88,10 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
     if attachment_urls:
         extra_url_res = url_analyzer.analyze_urls(attachment_urls)
         url_res = _merge_url_results(url_res, extra_url_res)
+
+    # --- Extract IPs from the ENTIRE .eml (headers + body + attachments) ---
+    ips_res = _extract_all_ips(raw_bytes, msg, text_body, html_body, attachment_res)
+    url_res["ips"] = ips_res
 
     ml_score = ml_classifier.predict(header_res, url_res, content_res, attachment_res)
 
@@ -154,6 +163,63 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "raw_headers": _stringify_headers(msg),
     }
     return analysis
+
+
+def _extract_all_ips(raw_bytes, msg, text_body, html_body, attachment_res) -> list:
+    """
+    Extract every IPv4 + IPv6 address from the ENTIRE .eml file.
+    """
+    seen = set()
+    all_ips = []
+
+    def _add(ip_infos):
+        for info in ip_infos:
+            ip = info.get("ip")
+            if not ip or ip in seen:
+                continue
+            seen.add(ip)
+            all_ips.append(info)
+
+    # 1) Full raw .eml as text
+    try:
+        raw_str = raw_bytes.decode("utf-8", errors="replace")
+    except Exception:
+        raw_str = ""
+    _add(extract_ips_from_text(raw_str))
+
+    # 2) Plain-text body
+    if text_body:
+        _add(extract_ips_from_text(text_body))
+
+    # 3) HTML body
+    if html_body:
+        _add(extract_ips_from_text(html_body))
+
+    # 4) Each header value
+    try:
+        for k, v in msg.items():
+            _add(extract_ips_from_text(str(v)))
+    except Exception:
+        pass
+
+    # 5) Hops (from_ip / by_ip)
+    try:
+        received = msg.get_all("Received", []) or []
+        for rcv in received:
+            _add(extract_ips_from_text(str(rcv)))
+    except Exception:
+        pass
+
+    # 6) Attachments (filename, content-type, embedded URLs)
+    for att in attachment_res.get("attachments", []) or []:
+        for field in ("filename", "content_type"):
+            val = att.get(field) if isinstance(att, dict) else None
+            if val:
+                _add(extract_ips_from_text(str(val)))
+        for u in att.get("embedded_urls", []) or []:
+            _add(extract_ips_from_text(u))
+
+    return all_ips
 
 
 def _get_all_text(msg) -> str:
@@ -352,7 +418,6 @@ def api_threat_map():
             continue
         seen_emails.add(aid)
 
-        # Pick the TRUE origin: last public IPv4 in hops (hops are newest→oldest)
         origin_ip = None
         for h in reversed(a.get("hops", []) or []):
             ip = h.get("from_ip")
@@ -361,11 +426,10 @@ def api_threat_map():
             if ip.startswith(("10.", "192.168.", "127.", "172.", "169.254.")):
                 continue
             if ":" in ip:
-                continue  # skip IPv6
+                continue
             origin_ip = ip
             break
 
-        # Fallback: first public IP from ips_found
         if not origin_ip:
             for entry in a.get("ips_found", []) or []:
                 ip = entry.get("ip")

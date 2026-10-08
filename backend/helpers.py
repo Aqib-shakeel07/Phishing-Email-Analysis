@@ -2,6 +2,7 @@ import re
 import json
 import os
 import hashlib
+import ipaddress
 import tldextract
 from urllib.parse import urlparse
 from config import BRANDS_FILE, KEYWORDS_FILE, TLDS_FILE
@@ -34,7 +35,6 @@ def load_tlds():
 # ---------------- Domain helpers ----------------
 
 def extract_domain(email_or_url: str) -> str:
-    """Extract registered domain from email or URL."""
     if not email_or_url:
         return ""
     if "@" in email_or_url and "://" not in email_or_url:
@@ -156,6 +156,96 @@ def extract_emails(text: str) -> list:
     if not text:
         return []
     return list(set(EMAIL_REGEX.findall(text)))
+
+
+# ---------------- IP extraction ----------------
+
+# IPv4 (strict)
+IPV4_REGEX = re.compile(
+    r"(?<![0-9.])"
+    r"((?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3})"
+    r"(?![0-9.])"
+)
+
+# IPv6 (broad match, filter later with ipaddress module)
+IPV6_CANDIDATE_REGEX = re.compile(
+    r"(?<![0-9A-Fa-f:])"
+    r"((?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{0,4}"
+    r"|::(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{0,4})"
+    r"(?![0-9A-Fa-f:])"
+)
+
+
+def classify_ip(ip: str) -> dict:
+    """Return a dict with ip + its classification flags."""
+    info = {
+        "ip": ip,
+        "private": False,
+        "loopback": False,
+        "link_local": False,
+        "multicast": False,
+        "reserved": False,
+        "public": True,
+        "version": 4 if "." in ip else 6,
+    }
+    try:
+        obj = ipaddress.ip_address(ip)
+        info["private"] = obj.is_private
+        info["loopback"] = obj.is_loopback
+        info["link_local"] = obj.is_link_local
+        info["multicast"] = obj.is_multicast
+        info["reserved"] = obj.is_reserved
+        info["public"] = obj.is_global
+    except ValueError:
+        info["public"] = False
+        info["reserved"] = True
+    return info
+
+
+def extract_ips_from_text(text: str) -> list:
+    """
+    Extract every IPv4 and IPv6 address from arbitrary text.
+    Returns a list of classification dicts (deduped by IP).
+    """
+    if not text:
+        return []
+
+    seen = set()
+    out = []
+
+    # IPv4
+    for m in IPV4_REGEX.finditer(text):
+        ip = m.group(1)
+        # reject things like 999.999.999.999 (regex already prevents that)
+        # reject version strings like 1.2.3.4.5 (regex already prevents)
+        if ip in seen:
+            continue
+        seen.add(ip)
+        out.append(classify_ip(ip))
+
+    # IPv6
+    for m in IPV6_CANDIDATE_REGEX.finditer(text):
+        raw = m.group(1)
+        # strip trailing colon issues
+        raw = raw.strip(":")
+        if not raw or raw == "::":
+            continue
+        try:
+            # normalize (compressed form)
+            obj = ipaddress.IPv6Address(raw)
+            ip = str(obj)
+        except ValueError:
+            continue
+        if ip in seen:
+            continue
+        # Skip if it's really just a portion of a MAC or time like "11:22"
+        if ip.count(":") < 2:
+            continue
+        seen.add(ip)
+        out.append(classify_ip(ip))
+
+    return out
 
 
 # ---------------- Misc ----------------

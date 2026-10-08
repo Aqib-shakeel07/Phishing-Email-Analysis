@@ -3,6 +3,8 @@ import re
 import email
 import zipfile
 import hashlib
+import base64
+import struct
 from helpers import sha256_file, clamp
 from validators import has_double_extension
 from logger import logger
@@ -13,7 +15,7 @@ DANGEROUS_EXTS = {
     "js", "jse", "vbs", "vbe", "wsf", "wsh", "ps1",
     "msi", "jar", "reg", "lnk", "cpl", "dll", "sys",
     "iso", "img", "vhd", "apk", "app", "dmg",
-    "svg", "svgz",               # SVG can execute JS via onload
+    "svg", "svgz",
 }
 
 MACRO_EXTS = {"docm", "xlsm", "pptm", "dotm", "xltm", "potm"}
@@ -21,6 +23,60 @@ MACRO_EXTS = {"docm", "xlsm", "pptm", "dotm", "xltm", "potm"}
 ARCHIVE_EXTS = {"zip", "rar", "7z", "tar", "gz", "bz2", "xz"}
 
 IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff"}
+
+
+def _image_dimensions(data: bytes):
+    """Return (width, height, mime) or (None, None, None)."""
+    if not data or len(data) < 24:
+        return None, None, None
+
+    # PNG
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        try:
+            w, h = struct.unpack(">II", data[16:24])
+            return w, h, "image/png"
+        except Exception:
+            return None, None, "image/png"
+
+    # JPEG
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        try:
+            while i < len(data) - 9:
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = data[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                              0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                    return w, h, "image/jpeg"
+                seg_len = struct.unpack(">H", data[i + 2:i + 4])[0]
+                i += 2 + seg_len
+        except Exception:
+            return None, None, "image/jpeg"
+
+    # GIF
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        try:
+            w, h = struct.unpack("<HH", data[6:10])
+            return w, h, "image/gif"
+        except Exception:
+            return None, None, "image/gif"
+
+    # BMP
+    if data[:2] == b"BM":
+        try:
+            w, h = struct.unpack("<II", data[18:26])
+            return w, h, "image/bmp"
+        except Exception:
+            return None, None, "image/bmp"
+
+    # WEBP
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return None, None, "image/webp"
+
+    return None, None, None
 
 
 class AttachmentAnalyzer:
@@ -54,20 +110,25 @@ class AttachmentAnalyzer:
         out = []
         for part in msg.walk():
             disp = str(part.get("Content-Disposition") or "").lower()
+            cid = part.get("Content-ID")
             filename = part.get_filename()
-            if not filename and "attachment" not in disp:
-                continue
-            if not filename:
+            # Inline images often have no filename, but have a Content-ID
+            if not filename and not cid and "attachment" not in disp:
                 continue
             try:
                 payload = part.get_payload(decode=True) or b""
             except Exception:
                 payload = b""
+            if not filename:
+                # try to infer from content-type
+                ext = part.get_content_subtype() or "bin"
+                filename = f"inline_image.{ext}"
             out.append({
                 "filename": filename,
                 "content_type": part.get_content_type(),
                 "size": len(payload),
                 "bytes": payload,
+                "content_id": cid,
             })
         return out
 
@@ -82,6 +143,10 @@ class AttachmentAnalyzer:
             "score": 0.0,
             "virustotal": None,
             "embedded_urls": [],
+            "image_preview": None,
+            "image_width": None,
+            "image_height": None,
+            "content_id": att.get("content_id"),
         }
         score = 0.0
         filename = att["filename"]
@@ -128,9 +193,7 @@ class AttachmentAnalyzer:
                 f"Extension/content-type mismatch: .{ext} vs {att['content_type']}"
             )
 
-        # ============================================================
-        # SVG payload detection (XSS / redirect / embedded URLs)
-        # ============================================================
+        # SVG payload detection
         if ext in ("svg", "svgz"):
             try:
                 text = att["bytes"].decode("utf-8", errors="replace")
@@ -142,17 +205,13 @@ class AttachmentAnalyzer:
                 info["flags"].append(
                     "SVG contains 'onload' event handler — XSS/redirect payload"
                 )
-
             if re.search(r"window\.location|location\.href|location\.replace|<script", text, re.I):
                 score += 35
                 info["flags"].append("SVG executes JavaScript redirect")
-
-            # <foreignObject> is often used for HTML injection
             if re.search(r"<foreignObject", text, re.I):
                 score += 20
                 info["flags"].append("SVG uses <foreignObject> (HTML injection vector)")
 
-            # Extract any URLs from the SVG
             urls_in_svg = re.findall(r"https?://[^\s'\"<>)\]]+", text)
             if urls_in_svg:
                 score += 20
@@ -161,16 +220,30 @@ class AttachmentAnalyzer:
                 )
                 info["embedded_urls"] = urls_in_svg
 
-            # base64 pre-filled credential payload after $ or ?u=
             if re.search(r"[\$?](?:u=)?[A-Za-z0-9+/=]{20,}", text):
                 score += 20
                 info["flags"].append(
                     "SVG contains base64 payload (pre-filled credential pattern)"
                 )
 
-        # ============================================================
-        # Large image attachment (QR / OCR phishing)
-        # ============================================================
+        # Image preview + dimensions
+        if ext in IMAGE_EXTS or att["content_type"].startswith("image/"):
+            try:
+                w, h, mime = _image_dimensions(att["bytes"])
+                info["image_width"] = w
+                info["image_height"] = h
+                if mime:
+                    info["content_type"] = mime
+
+                # Base64 data URL for inline preview (cap at 500 KB to avoid huge payloads)
+                if att["bytes"] and len(att["bytes"]) <= 500_000:
+                    b64 = base64.b64encode(att["bytes"]).decode("ascii")
+                    mt = mime or att["content_type"] or "image/png"
+                    info["image_preview"] = f"data:{mt};base64,{b64}"
+            except Exception as e:
+                logger.debug(f"Image preview failed for {filename}: {e}")
+
+        # Large image attachment
         if ext in IMAGE_EXTS and att["size"] > 500_000:
             score += 15
             info["flags"].append(

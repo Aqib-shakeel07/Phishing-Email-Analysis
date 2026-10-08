@@ -644,14 +644,6 @@ tbody tr:last-child td { border-bottom: none; }
 
 .encoded-badge { display: inline-block; background: var(--warn-soft); color: var(--warn); padding: 2px 8px; border-radius: 5px; font-size: 0.72rem; font-weight: 700; margin-right: 6px; }
 
-.mx-table-wrap { overflow-x: auto; margin-top: 6px; }
-.mx-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-.mx-table th, .mx-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; word-break: break-word; overflow-wrap: anywhere; }
-.mx-table th { background: rgba(10,16,28,0.6); color: var(--muted-2); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; white-space: nowrap; }
-.mx-table tr:hover td { background: rgba(79,139,255,0.05); }
-.mx-table .nowrap { white-space: nowrap; }
-.mx-table .mono { font-family: "JetBrains Mono", monospace; font-size: 0.74rem; }
-
 .header-list { max-height: 340px; overflow-y: auto; }
 .header-row { display: grid; grid-template-columns: 200px 1fr; gap: 12px; padding: 7px 9px; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
 .header-row .h-name { color: var(--muted); font-weight: 600; word-break: break-word; }
@@ -679,6 +671,90 @@ tbody tr:last-child td { border-bottom: none; }
 
 .copy-btn { padding: 4px 11px; background: rgba(79,139,255,0.10); border: 1px solid rgba(79,139,255,0.30); color: var(--accent-2); border-radius: 7px; font-size: 0.73rem; font-weight: 600; cursor: pointer; transition: 0.18s; font-family: inherit; }
 .copy-btn:hover { background: rgba(79,139,255,0.20); border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(79,139,255,0.2); }
+
+/* ============ Image Preview ============ */
+.img-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 4px;
+}
+.img-preview-item {
+  background: rgba(10, 16, 28, 0.5);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: 0.25s;
+}
+.img-preview-item:hover {
+  border-color: var(--border-hi);
+  box-shadow: 0 8px 26px rgba(79, 139, 255, 0.18);
+  transform: translateY(-2px);
+}
+.img-preview-frame {
+  width: 100%;
+  height: 180px;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.02) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.02) 75%),
+    rgba(5, 8, 15, 0.7);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  padding: 10px;
+}
+.img-preview-frame img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.img-preview-meta {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.img-preview-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  word-break: break-all;
+}
+.img-preview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.img-preview-tags .module-tag {
+  margin-right: 0;
+  padding: 1px 7px;
+  font-size: 0.68rem;
+}
+.img-preview-hash {
+  font-size: 0.72rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+.img-preview-hash .mono {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--text-2);
+}
+.img-preview-embedded {
+  font-size: 0.72rem;
+  color: var(--warn);
+  word-break: break-all;
+}
+.img-preview-embedded .mono {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--warn);
+}
 
 .muted { color: var(--muted); }
 
@@ -823,4 +899,5 @@ tbody tr:last-child td { border-bottom: none; }
   .header-row { grid-template-columns: 120px 1fr; }
   .summary-info { max-width: 100%; }
   .summary-subject { max-width: 100%; }
+  .img-preview-grid { grid-template-columns: 1fr 1fr; }
 }

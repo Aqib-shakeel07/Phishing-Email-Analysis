@@ -289,13 +289,12 @@ function showResult(a) {
   body.innerHTML = `
     ${renderBanner(a)}
     ${renderAuthSummary(a)}
-    ${renderHops(a)}
     ${renderHeaderCard(a)}
     ${renderFullHeaders(a)}
     ${renderTriggered(a)}
     ${renderUrlsCard(a)}
-    ${renderEncodedCard(a)}
     ${renderEncodedContentCard(a)}
+    ${renderImagePreviewCard(a)}
     ${renderIpsCard(a)}
     ${renderAttachmentsCard(a)}
     ${renderRawHeaders(a)}
@@ -453,48 +452,6 @@ function passFailUnknown(present, pass) {
   return `<span class="badge suspicious">UNKNOWN</span>`;
 }
 
-function renderHops(a) {
-  const hops = a.hops || [];
-  if (!hops.length) {
-    return `<div class="result-card"><h4>Relay Information</h4><p class="muted">No Received headers parsed.</p></div>`;
-  }
-
-  const totalDelay = hops.reduce((sum, h) => sum + (h.delay_seconds || 0), 0);
-
-  const rows = hops.map((h) => {
-    const delay = h.delay_seconds == null ? "—" : `${h.delay_seconds}s`;
-    const from = h.from_host
-      ? `${escapeHtml(h.from_host)}${h.from_ip ? " " + escapeHtml(h.from_ip) : ""}`
-      : "—";
-    const by = h.by_host
-      ? `${escapeHtml(h.by_host)}${h.by_ip ? " " + escapeHtml(h.by_ip) : ""}`
-      : "—";
-    const with_ = h.with ? escapeHtml(h.with) : "—";
-    const time = h.time ? escapeHtml(h.time) : "—";
-    return `<tr>
-      <td class="nowrap">${h.hop}</td>
-      <td class="nowrap">${delay}</td>
-      <td class="mono">${from}</td>
-      <td class="mono">${by}</td>
-      <td class="mono">${with_}</td>
-      <td class="nowrap">${time}</td>
-    </tr>`;
-  }).join("");
-
-  return `<div class="result-card">
-    <h4>Relay Information</h4>
-    <p class="muted" style="margin-bottom:8px">Total received delay: <strong>${totalDelay}s</strong> · ${hops.length} hop(s)</p>
-    <div class="mx-table-wrap">
-      <table class="mx-table">
-        <thead>
-          <tr><th>Hop</th><th>Delay</th><th>From</th><th>By</th><th>With</th><th>Time (UTC)</th></tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  </div>`;
-}
-
 function renderHeaderCard(a) {
   const toList = (a.to || []).map(formatAddress).join(", ") || "—";
   const ccList = (a.cc || []).map(formatAddress).join(", ") || "—";
@@ -613,55 +570,26 @@ function renderUrlsCard(a) {
   return `<div class="result-card"><h4>URLs Found</h4>${html}</div>`;
 }
 
-function renderEncodedCard(a) {
-  const urls = a.urls_found || [];
-  const encoded = urls.filter((u) =>
-    (u.flags || []).some((f) =>
-      /encoded|obfuscated|base64|%[0-9a-f]{2}/i.test(f)
-    ) || (u.url && /%[0-9a-fA-F]{2}/.test(u.url))
-  );
-
-  if (!encoded.length) {
-    return `<div class="result-card"><h4>Encoded / Obfuscated URLs</h4><p class="muted">None detected.</p></div>`;
-  }
-
-  const items = encoded.map((u) => {
-    const flags = [...new Set(u.flags || [])].map((f) => cleanFlag(f, u.url || "")).filter(Boolean);
-    return `<div class="url-item">
-      <div class="url">${escapeHtml(shortenUrl(u.url || ""))}</div>
-      <details class="url-details">
-        <summary>show full URL</summary>
-        <pre class="raw-pre small-pre">${escapeHtml(u.url || "")}</pre>
-      </details>
-      <div class="meta">
-        <span class="encoded-badge">${flags.length} signal(s)</span>
-        ${flags.map(escapeHtml).join(" · ")}
-      </div>
-    </div>`;
-  }).join("");
-
-  return `<div class="result-card"><h4>Encoded / Obfuscated URLs</h4>${items}</div>`;
-}
+/* ---- Encoded Content (MIME Part removed) ---- */
 
 function renderEncodedContentCard(a) {
-  const items = a.encoded_found || [];
+  const items = (a.encoded_found || []).filter((it) => it.type !== "mime-part");
   const dump = a.encoded_full_dump || {};
 
   if (!items.length && !dump.raw_eml) {
-    return `<div class="result-card"><h4>Encoded Content</h4><p class="muted">No encoded blobs detected.</p></div>`;
+    return "";
   }
 
   let html = "";
   const summary = a.encoded_summary || {};
   const summaryLine = Object.entries(summary)
-    .filter(([_, v]) => v > 0)
+    .filter(([k, v]) => v > 0 && k !== "mime_parts")
     .map(([k, v]) => `${k.replace(/_/g, " ")}=${v}`)
     .join(" · ");
 
   html += `<div class="enc-header-row">
     <h4>Encoded Content (${items.length})</h4>
     <div class="enc-badges">
-      ${summary.mime_parts ? `<span class="badge suspicious">${summary.mime_parts} MIME</span>` : ""}
       ${summary.base64 ? `<span class="badge suspicious">${summary.base64} base64</span>` : ""}
       ${summary.quoted_printable ? `<span class="badge suspicious">${summary.quoted_printable} QP</span>` : ""}
       ${summary.url_encoded ? `<span class="badge suspicious">${summary.url_encoded} URL-enc</span>` : ""}
@@ -696,7 +624,7 @@ function renderEncodedContentCard(a) {
       groups[t].push(it);
     });
 
-    const order = ["mime-part", "rfc2047-header", "base64", "quoted-printable", "url-encoded", "hex-escape", "hex-0x", "html-entities"];
+    const order = ["rfc2047-header", "base64", "quoted-printable", "url-encoded", "hex-escape", "hex-0x", "html-entities"];
     const present = Object.keys(groups).sort((a, b) => {
       const ia = order.indexOf(a), ib = order.indexOf(b);
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
@@ -758,7 +686,6 @@ function renderEncodedContentCard(a) {
 function typeLabel(t) {
   return {
     "base64": "Base64",
-    "mime-part": "MIME Part",
     "rfc2047-header": "RFC 2047 Header",
     "quoted-printable": "Quoted-Printable",
     "url-encoded": "URL-encoded",
@@ -766,6 +693,47 @@ function typeLabel(t) {
     "hex-0x": "Hex (0xNN)",
     "html-entities": "HTML Entities",
   }[t] || t;
+}
+
+/* ---------------- Image Preview ---------------- */
+
+function renderImagePreviewCard(a) {
+  const atts = a.attachments || [];
+  const images = atts.filter((at) => at.image_preview);
+
+  if (!images.length) return "";
+
+  const items = images.map((at) => {
+    const dims = (at.image_width && at.image_height)
+      ? `${at.image_width} × ${at.image_height} px`
+      : "unknown size";
+    const sizeKb = (at.size / 1024).toFixed(1);
+    const sha = at.sha256 ? at.sha256.slice(0, 16) + "…" : "—";
+
+    return `<div class="img-preview-item">
+      <div class="img-preview-frame">
+        <img src="${at.image_preview}" alt="${escapeHtml(at.filename || "")}" loading="lazy" />
+      </div>
+      <div class="img-preview-meta">
+        <div class="img-preview-name">${escapeHtml(at.filename || "image")}</div>
+        <div class="img-preview-tags">
+          <span class="module-tag">${escapeHtml(at.content_type || "image")}</span>
+          <span class="module-tag">${dims}</span>
+          <span class="module-tag">${sizeKb} KB</span>
+          ${(at.flags && at.flags.length) ? `<span class="badge suspicious">⚠ ${at.flags.length} flag(s)</span>` : ""}
+        </div>
+        <div class="img-preview-hash">SHA-256: <span class="mono">${escapeHtml(sha)}</span></div>
+        ${(at.embedded_urls && at.embedded_urls.length)
+          ? `<div class="img-preview-embedded">🔗 Embedded URL: <span class="mono">${at.embedded_urls.map(escapeHtml).join(" · ")}</span></div>`
+          : ""}
+      </div>
+    </div>`;
+  }).join("");
+
+  return `<div class="result-card">
+    <h4>Extracted Images (${images.length})</h4>
+    <div class="img-preview-grid">${items}</div>
+  </div>`;
 }
 
 function renderIpsCard(a) {
@@ -850,11 +818,9 @@ function renderLatestSummary(latest) {
   const score = latest.final_score ?? 0;
   const scoreLabel = cls === "safe" ? "Low risk" : cls === "suspicious" ? "Needs review" : "High risk";
 
-  // Gather top indicators from triggered features + attachment flags
   const flags = latest.triggered_features || [];
   const topFlags = flags.slice(0, 6);
 
-  // Build "what to verify" checklist based on the signals we found
   const checklist = buildChecklist(latest);
 
   const flagsHtml = topFlags.length
@@ -921,7 +887,6 @@ function buildChecklist(a) {
   const flags = a.triggered_features || [];
   const flagText = flags.map((f) => (f.detail || "").toLowerCase()).join(" | ");
 
-  // SPF / DKIM / DMARC
   if (flagText.includes("spf") || !a.spf_present) {
     out.push({ text: "Verify SPF alignment on the sender domain", done: a.spf_pass === true });
   }
@@ -932,7 +897,6 @@ function buildChecklist(a) {
     out.push({ text: "Confirm DMARC policy exists for sender domain", done: a.dmarc_pass === true });
   }
 
-  // Reply-To / Return-Path
   if (a.reply_to_domain && a.sender_domain && a.reply_to_domain !== a.sender_domain) {
     out.push({ text: `Confirm Reply-To domain '${a.reply_to_domain}' is legitimate`, done: false });
   }
@@ -940,19 +904,16 @@ function buildChecklist(a) {
     out.push({ text: `Check Return-Path mismatch with From domain`, done: false });
   }
 
-  // Display name spoofing
   if (flagText.includes("impersonates") || flagText.includes("claims")) {
     out.push({ text: "Verify the display name matches the actual sender", done: false });
   }
 
-  // URLs
   const urls = a.urls_found || [];
   const riskyUrls = urls.filter((u) => (u.score || 0) >= 30);
   if (riskyUrls.length) {
     out.push({ text: `Open ${riskyUrls.length} high-risk URL(s) only in a sandbox`, done: false });
   }
 
-  // Attachments
   const atts = a.attachments || [];
   const riskyAtts = atts.filter((at) => (at.score || 0) >= 20);
   if (riskyAtts.length) {
@@ -967,7 +928,6 @@ function buildChecklist(a) {
     out.push({ text: "Check URLs embedded inside attachments", done: false });
   }
 
-  // Content warnings
   if (flagText.includes("credential") || flagText.includes("otp")) {
     out.push({ text: "Never enter credentials from email links", done: false });
   }
@@ -975,7 +935,6 @@ function buildChecklist(a) {
     out.push({ text: "Inspect hidden HTML content in the raw body", done: false });
   }
 
-  // Verification contact
   if (a.sender_domain) {
     out.push({ text: `Contact sender via a known phone number, not reply`, done: false });
   }
@@ -1257,7 +1216,6 @@ async function loadHistory() {
     allItems = data.items || [];
     applyFilters();
 
-    // Render latest summary from the most recent item
     if (allItems.length) {
       const latest = allItems.reduce((a, b) => {
         const ta = new Date(a.created_at || 0).getTime();
