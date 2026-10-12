@@ -1,5 +1,10 @@
 import os
 import io
+import base64
+import quopri
+import binascii
+from email import policy
+from email.header import decode_header, make_header
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -14,42 +19,37 @@ from database import (
     get_all_analyses, get_stats, delete_analysis,
     load_brand_domains
 )
-from helpers import (
-    load_brands, score_to_verdict, clamp,
-    extract_ips_from_text,
-)
+from helpers import load_brands, score_to_verdict, clamp
 
 from header_analyzer import HeaderAnalyzer, parse_email_bytes
 from url_analyzer import URLAnalyzer
 from content_analyzer import ContentAnalyzer
 from attachment_analyzer import AttachmentAnalyzer
-from encoded_analyzer import EncodedAnalyzer
 from scoring_engine import ScoringEngine
 from virustotal_api import VirusTotalClient
-from abuseipdb_api import AbuseIPDBClient
-from geoip_lookup import lookup_ip as geo_lookup_ip
 from ml_classifier import MLClassifier, generate_synthetic_dataset
 from report_generator import ReportGenerator, build_full_report
 
 
+# ---------------- App setup ----------------
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
-app.config["TEMPLATES_AUTO_RELOAD"] = True
-app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 CORS(app)
 
+# ---------------- Components ----------------
 
 vt_client = VirusTotalClient()
-abuse_client = AbuseIPDBClient()
 header_analyzer = HeaderAnalyzer()
 url_analyzer = URLAnalyzer()
 content_analyzer = ContentAnalyzer()
 attachment_analyzer = AttachmentAnalyzer(virustotal_client=vt_client)
-encoded_analyzer = EncodedAnalyzer()
 scoring_engine = ScoringEngine()
 ml_classifier = MLClassifier()
 report_generator = ReportGenerator()
 
+
+# ---------------- Bootstrap ----------------
 
 def bootstrap():
     init_database()
@@ -59,6 +59,183 @@ def bootstrap():
         logger.warning(f"Brand seed skipped: {e}")
 
 
+# ---------------- MIME-aware extraction ----------------
+
+MAGIC_SIGS = [
+    (b"\x89PNG\r\n\x1a\n", "PNG image"),
+    (b"\xff\xd8\xff", "JPEG image"),
+    (b"GIF87a", "GIF image"),
+    (b"GIF89a", "GIF image"),
+    (b"%PDF-", "PDF document"),
+    (b"PK\x03\x04", "ZIP / Office document"),
+    (b"Rar!\x1a\x07", "RAR archive"),
+    (b"\x1f\x8b", "GZIP archive"),
+    (b"MZ", "Windows executable"),
+    (b"\x7fELF", "Linux executable"),
+    (b"<svg", "SVG image"),
+    (b"<?xml", "XML document"),
+    (b"RIFF", "RIFF/WEBP/AVI"),
+]
+
+
+def _decode_header_value(raw_value):
+    """Decode RFC 2047 encoded header (=?UTF-8?B?...?=) into plain text."""
+    if not raw_value:
+        return ""
+    try:
+        return str(make_header(decode_header(raw_value)))
+    except Exception:
+        return str(raw_value)
+
+
+def _fingerprint(data: bytes):
+    """Return a short string describing the decoded payload."""
+    if not data:
+        return None
+    head = data[:16]
+    for sig, label in MAGIC_SIGS:
+        if head.startswith(sig):
+            return label
+    if b"<svg" in data[:512].lower():
+        return "SVG image"
+    try:
+        sample = data[:512].decode("utf-8", errors="strict")
+        if all((ord(c) >= 32 or c in "\r\n\t") for c in sample):
+            return "text"
+    except Exception:
+        pass
+    return "binary"
+
+
+def _part_charset(part):
+    try:
+        return part.get_content_charset() or "utf-8"
+    except Exception:
+        return "utf-8"
+
+
+def _decode_payload(part):
+    """
+    Decode a MIME part's payload using its Content-Transfer-Encoding.
+    Returns (decoded_bytes, method).
+    """
+    cte = (part.get("Content-Transfer-Encoding") or "").strip().lower()
+
+    try:
+        raw = part.get_payload(decode=False)
+    except Exception:
+        raw = None
+
+    if raw is None:
+        try:
+            data = part.get_payload(decode=True)
+            return (data or b"", "raw")
+        except Exception as e:
+            return (b"", f"error:{e}")
+
+    if isinstance(raw, list):
+        return (b"", "multipart")
+
+    if not isinstance(raw, str):
+        raw = str(raw)
+
+    if cte in ("base64",):
+        compact = "".join(raw.split())
+        try:
+            return (base64.b64decode(compact, validate=False), "base64")
+        except (binascii.Error, ValueError) as e:
+            return (b"", f"error:base64:{e}")
+
+    if cte in ("quoted-printable", "quoted_printable", "quotedprintable"):
+        try:
+            return (quopri.decodestring(raw.encode("utf-8", errors="ignore")), "qp")
+        except Exception as e:
+            return (b"", f"error:qp:{e}")
+
+    if cte in ("7bit", "8bit", "binary", ""):
+        charset = _part_charset(part)
+        try:
+            return (raw.encode(charset, errors="replace"), cte or "7bit")
+        except Exception:
+            return (raw.encode("utf-8", errors="replace"), cte or "7bit")
+
+    try:
+        compact = "".join(raw.split())
+        return (base64.b64decode(compact, validate=False), "base64(fallback)")
+    except Exception:
+        pass
+    try:
+        return (quopri.decodestring(raw.encode("utf-8", errors="ignore")), "qp(fallback)")
+    except Exception as e:
+        return (b"", f"error:unknown:{e}")
+
+
+def extract_encoded_parts(msg, max_size=2_000_000):
+    """
+    Walk every MIME part, decode using the declared CTE + charset,
+    and return a list of decoded parts.
+    """
+    parts_out = []
+    idx = 0
+
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+
+        ctype = part.get_content_type() or "application/octet-stream"
+        cte = (part.get("Content-Transfer-Encoding") or "").strip().lower()
+        charset = _part_charset(part)
+        filename = part.get_filename()
+        if filename:
+            filename = _decode_header_value(filename)
+        disp = str(part.get("Content-Disposition") or "")
+
+        if ctype in ("text/plain", "text/html") and cte not in ("base64", "quoted-printable"):
+            idx += 1
+            continue
+
+        decoded, method = _decode_payload(part)
+
+        if not decoded:
+            idx += 1
+            continue
+
+        if len(decoded) > max_size:
+            original_len = len(decoded)
+            decoded_trunc = decoded[:max_size]
+        else:
+            original_len = len(decoded)
+            decoded_trunc = decoded
+
+        magic = _fingerprint(decoded_trunc)
+        is_binary = magic not in ("text", None) and magic is not None
+
+        if not is_binary:
+            try:
+                text = decoded_trunc.decode(charset, errors="replace")
+            except Exception:
+                text = decoded_trunc.decode("utf-8", errors="replace")
+        else:
+            text = base64.b64encode(decoded_trunc).decode("ascii")
+
+        parts_out.append({
+            "part_index": idx,
+            "content_type": ctype,
+            "transfer_encoding": cte or "7bit",
+            "charset": charset,
+            "filename": filename,
+            "content_disposition": disp.strip() or None,
+            "decoded_bytes_len": original_len,
+            "decoded_text": text,
+            "is_binary": is_binary,
+            "magic": magic,
+            "method": method,
+        })
+        idx += 1
+
+    return parts_out
+
+
 # ---------------- Core pipeline ----------------
 
 def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
@@ -66,9 +243,9 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
 
     header_res = header_analyzer.analyze(msg)
 
-    text_body = _get_all_text(msg)
-    html_body = _get_all_html(msg)
-    full_text = text_body + "\n" + html_body
+    body_text = _get_all_text(msg)
+    body_html = _get_all_html(msg)
+    full_text = body_text + "\n" + body_html
 
     url_text_res = url_analyzer.analyze_text(full_text)
     url_html_res = _analyze_html_urls(msg)
@@ -76,22 +253,6 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
 
     content_res = content_analyzer.analyze(msg)
     attachment_res = attachment_analyzer.analyze(msg)
-    encoded_res = encoded_analyzer.analyze(
-        raw_bytes, msg=msg, html=html_body, text=text_body
-    )
-
-    # --- Merge URLs found inside attachments into URL analysis ---
-    attachment_urls = []
-    for att in attachment_res.get("attachments", []):
-        for u in att.get("embedded_urls", []) or []:
-            attachment_urls.append(u)
-    if attachment_urls:
-        extra_url_res = url_analyzer.analyze_urls(attachment_urls)
-        url_res = _merge_url_results(url_res, extra_url_res)
-
-    # --- Extract IPs from the ENTIRE .eml (headers + body + attachments) ---
-    ips_res = _extract_all_ips(raw_bytes, msg, text_body, html_body, attachment_res)
-    url_res["ips"] = ips_res
 
     ml_score = ml_classifier.predict(header_res, url_res, content_res, attachment_res)
 
@@ -99,21 +260,20 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         header_res, url_res, content_res, attachment_res, ml_score
     )
 
-    if encoded_res.get("score", 0) > 0:
-        final["final_score"] = clamp(final.get("final_score", 0) + encoded_res["score"] * 0.2)
-        final["verdict"] = score_to_verdict(final["final_score"])
-        summary = encoded_res.get("summary", {})
-        final["triggered_features"].append({
-            "module": "encoded",
-            "detail": f"{encoded_res['count']} encoded blob(s) "
-                      f"(base64={summary.get('base64',0)}, "
-                      f"QP={summary.get('quoted_printable',0)}, "
-                      f"URL={summary.get('url_encoded',0)}, "
-                      f"hex={summary.get('hex',0)})"
-        })
+    try:
+        encoded_parts = extract_encoded_parts(msg)
+    except Exception as e:
+        logger.warning(f"extract_encoded_parts failed: {e}")
+        encoded_parts = []
+
+    try:
+        raw_email_text = raw_bytes.decode("utf-8", errors="replace")
+    except Exception:
+        raw_email_text = ""
 
     analysis = {
         "filename": filename,
+
         "sender": header_res.get("sender"),
         "sender_name": header_res.get("sender_name"),
         "sender_domain": header_res.get("sender_domain"),
@@ -128,10 +288,6 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "message_id": header_res.get("message_id"),
         "received_chain": header_res.get("received_chain"),
 
-        "hops": header_res.get("hops", []),
-        "full_headers": header_res.get("full_headers", []),
-        "auth_summary": header_res.get("auth_summary", {}),
-
         "spf_present": header_res.get("spf_present"),
         "spf_pass": header_res.get("spf_pass"),
         "dkim_present": header_res.get("dkim_present"),
@@ -144,7 +300,6 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "url_score": url_res.get("score", 0),
         "content_score": content_res.get("score", 0),
         "attachment_score": attachment_res.get("score", 0),
-        "encoded_score": encoded_res.get("score", 0),
         "ml_score": ml_score,
 
         "final_score": final.get("final_score", 0),
@@ -156,70 +311,17 @@ def analyze_email_bytes(raw_bytes: bytes, filename: str = "email.eml") -> dict:
         "urls_found": url_res.get("urls", []),
         "ips_found": url_res.get("ips", []),
         "attachments": attachment_res.get("attachments", []),
-        "encoded_found": encoded_res.get("items", []),
-        "encoded_summary": encoded_res.get("summary", {}),
-        "encoded_full_dump": encoded_res.get("full_dump", {}),
         "matched_keywords": content_res.get("matched_keywords", {}),
         "raw_headers": _stringify_headers(msg),
+
+        "body_text": body_text,
+        "body_html": body_html,
+
+        "raw_email": raw_email_text,
+
+        "encoded_parts": encoded_parts,
     }
     return analysis
-
-
-def _extract_all_ips(raw_bytes, msg, text_body, html_body, attachment_res) -> list:
-    """
-    Extract every IPv4 + IPv6 address from the ENTIRE .eml file.
-    """
-    seen = set()
-    all_ips = []
-
-    def _add(ip_infos):
-        for info in ip_infos:
-            ip = info.get("ip")
-            if not ip or ip in seen:
-                continue
-            seen.add(ip)
-            all_ips.append(info)
-
-    # 1) Full raw .eml as text
-    try:
-        raw_str = raw_bytes.decode("utf-8", errors="replace")
-    except Exception:
-        raw_str = ""
-    _add(extract_ips_from_text(raw_str))
-
-    # 2) Plain-text body
-    if text_body:
-        _add(extract_ips_from_text(text_body))
-
-    # 3) HTML body
-    if html_body:
-        _add(extract_ips_from_text(html_body))
-
-    # 4) Each header value
-    try:
-        for k, v in msg.items():
-            _add(extract_ips_from_text(str(v)))
-    except Exception:
-        pass
-
-    # 5) Hops (from_ip / by_ip)
-    try:
-        received = msg.get_all("Received", []) or []
-        for rcv in received:
-            _add(extract_ips_from_text(str(rcv)))
-    except Exception:
-        pass
-
-    # 6) Attachments (filename, content-type, embedded URLs)
-    for att in attachment_res.get("attachments", []) or []:
-        for field in ("filename", "content_type"):
-            val = att.get(field) if isinstance(att, dict) else None
-            if val:
-                _add(extract_ips_from_text(str(val)))
-        for u in att.get("embedded_urls", []) or []:
-            _add(extract_ips_from_text(u))
-
-    return all_ips
 
 
 def _get_all_text(msg) -> str:
@@ -300,7 +402,7 @@ def _stringify_headers(msg) -> str:
         return ""
 
 
-# ---------------- Page routes ----------------
+# ---------------- Routes ----------------
 
 @app.route("/", methods=["GET"])
 def index():
@@ -329,8 +431,6 @@ def abuseipdb_page():
     return render_template("abuseipdb.html")
 
 
-# ---------------- Analysis API ----------------
-
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({
@@ -338,8 +438,6 @@ def health():
         "app": APP_NAME,
         "version": APP_VERSION,
         "ml_ready": ml_classifier.is_ready(),
-        "virustotal_ready": vt_client.is_ready(),
-        "abuseipdb_ready": abuse_client.is_ready(),
     })
 
 
@@ -377,7 +475,10 @@ def api_list():
     limit = int(request.args.get("limit", 100))
     offset = int(request.args.get("offset", 0))
     rows = get_all_analyses(limit=limit, offset=offset)
-    return jsonify({"count": len(rows), "items": [_row_to_dict(r) for r in rows]})
+    return jsonify({
+        "count": len(rows),
+        "items": [_row_to_dict(r) for r in rows],
+    })
 
 
 @app.route("/api/analyses/<int:analysis_id>", methods=["GET"])
@@ -397,84 +498,6 @@ def api_delete(analysis_id):
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
     return jsonify(get_stats())
-
-
-@app.route("/api/threat-map", methods=["GET"])
-def api_threat_map():
-    """One marker per analyzed email — origin IP only, deduplicated by analysis ID."""
-    rows = get_all_analyses(limit=500)
-    points = []
-    country_counts = {}
-    seen_emails = set()
-
-    for row in rows:
-        a = _row_to_dict(row)
-        verdict = a.get("verdict")
-        if verdict not in ("Suspicious", "Phishing"):
-            continue
-
-        aid = a.get("id")
-        if aid in seen_emails:
-            continue
-        seen_emails.add(aid)
-
-        origin_ip = None
-        for h in reversed(a.get("hops", []) or []):
-            ip = h.get("from_ip")
-            if not ip:
-                continue
-            if ip.startswith(("10.", "192.168.", "127.", "172.", "169.254.")):
-                continue
-            if ":" in ip:
-                continue
-            origin_ip = ip
-            break
-
-        if not origin_ip:
-            for entry in a.get("ips_found", []) or []:
-                ip = entry.get("ip")
-                if not ip or ":" in ip:
-                    continue
-                if entry.get("public"):
-                    origin_ip = ip
-                    break
-
-        if not origin_ip:
-            continue
-
-        geo = geo_lookup_ip(origin_ip)
-        if geo.get("skip") or geo.get("error"):
-            continue
-        if geo.get("lat") is None or geo.get("lon") is None:
-            continue
-
-        cc = geo.get("country_code") or "??"
-        country_counts[cc] = country_counts.get(cc, 0) + 1
-
-        points.append({
-            "ip": origin_ip,
-            "lat": geo["lat"],
-            "lon": geo["lon"],
-            "country": geo.get("country"),
-            "country_code": cc,
-            "city": geo.get("city"),
-            "isp": geo.get("isp"),
-            "verdict": verdict,
-            "sender": a.get("sender"),
-            "subject": a.get("subject"),
-            "analysis_id": aid,
-        })
-
-    top_countries = sorted(
-        [{"cc": k, "count": v} for k, v in country_counts.items()],
-        key=lambda x: -x["count"],
-    )[:8]
-
-    return jsonify({
-        "points": points,
-        "country_counts": top_countries,
-        "total": len(points),
-    })
 
 
 @app.route("/api/analyses/<int:analysis_id>/report", methods=["GET"])
@@ -508,116 +531,6 @@ def api_train():
         return jsonify({"error": str(e)}), 500
 
 
-# ---------------- VirusTotal API ----------------
-
-@app.route("/api/vt/ip", methods=["GET"])
-def api_vt_ip():
-    ip = request.args.get("ip", "").strip()
-    if not ip:
-        return jsonify({"error": "missing ?ip="}), 400
-    if not vt_client.is_ready():
-        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
-    return jsonify(vt_client.lookup_ip(ip))
-
-
-@app.route("/api/vt/url", methods=["GET"])
-def api_vt_url():
-    url = request.args.get("url", "").strip()
-    if not url:
-        return jsonify({"error": "missing ?url="}), 400
-    if not vt_client.is_ready():
-        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
-    return jsonify(vt_client.lookup_url_full(url))
-
-
-@app.route("/api/vt/domain", methods=["GET"])
-def api_vt_domain():
-    domain = request.args.get("domain", "").strip()
-    if not domain:
-        return jsonify({"error": "missing ?domain="}), 400
-    if not vt_client.is_ready():
-        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
-    return jsonify(vt_client.lookup_domain_full(domain))
-
-
-@app.route("/api/vt/hash", methods=["GET"])
-def api_vt_hash():
-    h = request.args.get("hash", "").strip()
-    if not h:
-        return jsonify({"error": "missing ?hash="}), 400
-    if not vt_client.is_ready():
-        return jsonify({"error": "VIRUSTOTAL_API_KEY not configured"}), 503
-    return jsonify(vt_client.lookup_hash(h))
-
-
-# ---------------- AbuseIPDB API ----------------
-
-@app.route("/api/abuse/ip", methods=["GET"])
-def api_abuse_ip():
-    ip = request.args.get("ip", "").strip()
-    if not ip:
-        return jsonify({"error": "missing ?ip="}), 400
-    if not abuse_client.is_ready():
-        return jsonify({"error": "ABUSEIPDB_API_KEY not configured"}), 503
-    days = int(request.args.get("days", 90))
-    return jsonify(abuse_client.check_ip(ip, max_age_days=days))
-
-
-# ---------------- Enrichment ----------------
-
-@app.route("/api/enrich/<int:analysis_id>", methods=["GET"])
-def api_enrich(analysis_id):
-    row = get_analysis(analysis_id)
-    if not row:
-        return jsonify({"error": "not found"}), 404
-
-    a = _row_to_dict(row)
-    urls = a.get("urls_found", []) or []
-    ips = a.get("ips_found", []) or []
-
-    vt_urls = []
-    if vt_client.is_ready():
-        seen = set()
-        for u in urls[:10]:
-            link = u.get("url")
-            if not link or link in seen:
-                continue
-            seen.add(link)
-            try:
-                vt_urls.append(vt_client.lookup_url_full(link))
-            except Exception as e:
-                vt_urls.append({"url": link, "error": str(e)})
-
-    vt_ips = []
-    abuse_ips = []
-    seen_ips = set()
-    for entry in ips[:10]:
-        ip = entry.get("ip")
-        if not ip or ip in seen_ips:
-            continue
-        seen_ips.add(ip)
-        if vt_client.is_ready():
-            try:
-                vt_ips.append(vt_client.lookup_ip(ip))
-            except Exception as e:
-                vt_ips.append({"ip": ip, "error": str(e)})
-        if abuse_client.is_ready():
-            try:
-                abuse_ips.append(abuse_client.check_ip(ip))
-            except Exception as e:
-                abuse_ips.append({"ip": ip, "error": str(e)})
-
-    return jsonify({
-        "analysis_id": analysis_id,
-        "virustotal": {"urls": vt_urls, "ips": vt_ips},
-        "abuseipdb": {"ips": abuse_ips},
-        "keys": {
-            "virustotal": vt_client.is_ready(),
-            "abuseipdb": abuse_client.is_ready(),
-        },
-    })
-
-
 # ---------------- Helpers ----------------
 
 def _row_to_dict(row) -> dict:
@@ -639,10 +552,6 @@ def _row_to_dict(row) -> dict:
         "message_id": getattr(row, "message_id", None),
         "received_chain": row.received_chain or [],
 
-        "hops": getattr(row, "hops", None) or [],
-        "full_headers": getattr(row, "full_headers", None) or [],
-        "auth_summary": getattr(row, "auth_summary", None) or {},
-
         "spf_present": getattr(row, "spf_present", None),
         "spf_pass": row.spf_pass,
         "dkim_present": getattr(row, "dkim_present", None),
@@ -655,7 +564,6 @@ def _row_to_dict(row) -> dict:
         "url_score": row.url_score,
         "content_score": row.content_score,
         "attachment_score": row.attachment_score,
-        "encoded_score": getattr(row, "encoded_score", 0.0),
         "ml_score": row.ml_score,
         "final_score": row.final_score,
         "verdict": row.verdict,
@@ -665,19 +573,22 @@ def _row_to_dict(row) -> dict:
             "url": row.url_score,
             "content": row.content_score,
             "attachment": row.attachment_score,
-            "encoded": getattr(row, "encoded_score", 0.0),
             "ml": row.ml_score,
         },
         "urls_found": row.urls_found or [],
         "ips_found": getattr(row, "ips_found", None) or [],
         "attachments": row.attachments or [],
-        "encoded_found": getattr(row, "encoded_found", None) or [],
-        "encoded_full_dump": getattr(row, "encoded_full_dump", None) or {},
         "triggered_features": row.triggered_features or [],
         "raw_headers": row.raw_headers,
+        "body_text": getattr(row, "body_text", None) or "",
+        "body_html": getattr(row, "body_html", None) or "",
+        "raw_email": getattr(row, "raw_email", None) or "",
+        "encoded_parts": getattr(row, "encoded_parts", None) or [],
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
+
+# ---------------- Entrypoint ----------------
 
 if __name__ == "__main__":
     bootstrap()
