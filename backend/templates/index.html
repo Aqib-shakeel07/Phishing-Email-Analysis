@@ -4,13 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Phishing Email Analyzer</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=9" />
 </head>
 <body>
   <header class="topbar">
     <h1>🛡️ Phishing Email Analyzer</h1>
     <nav>
-      <a href="/">Analyze</a>
+      <a href="/" class="active">Analyze</a>
       <a href="/dashboard">Dashboard</a>
     </nav>
   </header>
@@ -51,25 +54,9 @@
         <div class="score-bars" id="scoreBars"></div>
       </div>
 
-      <!-- Authentication status -->
       <div class="card">
-        <h3>Authentication Status</h3>
-        <table class="kv" id="authTable"></table>
-      </div>
-
-      <!-- From / To / Reply-To -->
-      <div class="card">
-        <h3>Message Header</h3>
+        <h3>Summary</h3>
         <table class="kv" id="summaryTable"></table>
-      </div>
-
-      <!-- Full raw headers -->
-      <div class="card">
-        <h3>Raw Headers</h3>
-        <details>
-          <summary class="muted" style="cursor:pointer;">Show / hide raw email headers</summary>
-          <pre id="rawHeadersPre" class="raw-pre"></pre>
-        </details>
       </div>
 
       <div class="card">
@@ -103,6 +90,6 @@
     <p>© <span id="year"></span> Phishing Email Analyzer</p>
   </footer>
 
-  <script src="/static/script.js"></script>
+  <script src="/static/script.js?v=9"></script>
 </body>
 </html>
