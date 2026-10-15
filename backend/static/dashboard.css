@@ -66,6 +66,7 @@ a { color: inherit; text-decoration: none; }
   padding: 16px 0 16px 16px;
   align-self: start;
   height: auto;
+  z-index: 50;
 }
 
 .sidebar {
@@ -83,6 +84,8 @@ a { color: inherit; text-decoration: none; }
     inset 0 0 30px rgba(59,130,246,0.05),
     0 20px 60px rgba(0,0,0,0.4);
   transition: 0.3s;
+  position: relative;
+  z-index: 51;
 }
 .sidebar:hover {
   box-shadow:
@@ -236,6 +239,8 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   flex-direction: column;
   gap: 22px;
+  position: relative;
+  z-index: 1;
 }
 
 /* Topbar */
@@ -354,6 +359,7 @@ a { color: inherit; text-decoration: none; }
   transition: 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
   position: relative;
   overflow: hidden;
+  z-index: 1;
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,0.05),
     0 4px 20px rgba(0,0,0,0.3);
@@ -370,6 +376,7 @@ a { color: inherit; text-decoration: none; }
   background: var(--glass-hover);
   border-color: var(--border-hover);
   transform: translateY(-3px);
+  z-index: 2;
   box-shadow:
     0 0 40px rgba(59,130,246,0.30),
     inset 0 1px 0 rgba(255,255,255,0.10),
@@ -406,6 +413,7 @@ a { color: inherit; text-decoration: none; }
     0 4px 20px rgba(0,0,0,0.3);
   position: relative;
   overflow: hidden;
+  z-index: 1;
 }
 .panel::before {
   content: "";
@@ -417,6 +425,7 @@ a { color: inherit; text-decoration: none; }
 }
 .panel:hover {
   border-color: var(--border-hover);
+  z-index: 2;
   box-shadow:
     0 0 40px rgba(59,130,246,0.25),
     inset 0 1px 0 rgba(255,255,255,0.10),
@@ -597,24 +606,33 @@ a { color: inherit; text-decoration: none; }
 
 /* ============ Modals ============ */
 .modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(6, 9, 15, 0.75);
-  backdrop-filter: blur(8px);
-  display: grid; place-items: center;
-  z-index: 200; padding: 20px;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(14px);
+  display: grid;
+  place-items: center;
+  z-index: 9999;
+  padding: 20px;
 }
 .modal-overlay.hidden { display: none; }
 .modal {
-  width: 100%; max-width: 560px;
-  background: linear-gradient(180deg, rgba(20,30,52,0.95), rgba(10,17,32,0.98));
-  border: 1px solid var(--border);
+  width: 100%;
+  max-width: 560px;
+  background: linear-gradient(180deg, #1a2540 0%, #0d1526 100%);
+  border: 1px solid rgba(96, 165, 250, 0.40);
   border-radius: 20px;
   box-shadow:
-    0 0 60px rgba(59,130,246,0.25),
-    0 24px 80px rgba(0,0,0,0.7);
+    0 0 80px rgba(59, 130, 246, 0.50),
+    0 24px 80px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(30px) saturate(150%);
-  display: flex; flex-direction: column;
-  max-height: 90vh; overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  overflow: hidden;
+  position: relative;
+  z-index: 10000;
 }
 .modal.modal-lg { max-width: 900px; }
 .modal-head {
@@ -793,34 +811,4 @@ a { color: inherit; text-decoration: none; }
   .result-kv td:first-child { width: 130px; }
   .nav-item { width: 46px; height: 46px; }
   .brand-logo { width: 46px; height: 46px; }
-}
-/* ============ Z-INDEX FIX ============ */
-.sidebar-wrap {
-  z-index: 50;
-  position: sticky;
-}
-
-.sidebar {
-  position: relative;
-  z-index: 51;
-}
-
-.main {
-  position: relative;
-  z-index: 1;
-}
-
-/* Every card/panel/stat-card stays BELOW the sidebar */
-.stat-card,
-.panel,
-.modal-overlay,
-.modal {
-  position: relative;
-  z-index: 1;
-}
-
-/* Hover lift should NOT raise above sidebar */
-.stat-card:hover,
-.panel:hover {
-  z-index: 2;
 }
